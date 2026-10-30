@@ -1,0 +1,38 @@
+# Builds a release zip when a version tag is pushed (v0.3.0 -> Hearthlog-0.3.0.zip)
+# and attaches it, plus a release.json for WowUp, to a GitHub Release.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the addon version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          toc="$(sed -n 's/^## Version: //p' Hearthlog/Hearthlog.toc | tr -d '\r')"
+          if [ "$tag" != "$toc" ]; then echo "tag $tag != toc $toc"; exit 1; fi
+      - name: Build zip and release.json
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          zip="Hearthlog-$ver.zip"
+          zip -r "$zip" Hearthlog -x '*.DS_Store'
+          era="$(sed -n 's/^## Interface: //p' Hearthlog/Hearthlog_Vanilla.toc | tr -d '\r')"
+          main="$(sed -n 's/^## Interface: //p' Hearthlog/Hearthlog_Mainline.toc | tr -d '\r')"
+          cat > release.json <<JSON
+          {"releases":[{"filename":"$zip","nolib":false,"metadata":[
+            {"flavor":"classic","interface":$era},
+            {"flavor":"mainline","interface":$main}
+          ]}]}
+          JSON
+          cat release.json
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Hearthlog-*.zip
+            release.json
+          generate_release_notes: true
