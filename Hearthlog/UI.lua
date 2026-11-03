@@ -8,7 +8,7 @@ local Print = ns.Print
 -- (SKINS is a table so a second look can be added later without touching the layout code.)
 -- Left pane: stat rows (label, value, note). Right pane: a scrolling log. Settings tab: checkboxes.
 
-local W, H = 720, 560
+local W, H = 720, 640
 local LEFT_W = 300
 local ROW_H = 22
 
@@ -22,11 +22,11 @@ local SKINS = {
         note = { 0.60, 0.56, 0.50 }, header = { 1, 0.82, 0 }, red = { 1, 0.35, 0.35 }, green = { 0.25, 1, 0.5 },
         paneBg = { 0.04, 0.05, 0.07, 0.9 }, paneBorder = { 0.36, 0.29, 0.12, 1 },
         tabs = "bottom", ruled = false, portrait = true,
-        tabNames = { "Overview", "Journey", "Combat", "Loot", "Settings" },
+        tabNames = { "Overview", "Journey", "Combat", "Loot", "Friends", "Settings" },
     },
 }
 
-local TABS = { "overview", "journey", "combat", "loot", "settings" }
+local TABS = { "overview", "journey", "combat", "loot", "friends", "settings" }
 
 local frame, skin, current = nil, nil, "overview"
 local widgets = {}
@@ -53,10 +53,22 @@ local function Day(t) return date("%b %d", t):gsub(" 0", " ") end
 -- Content: each tab returns rows for the left pane and lines for the right
 -- rows: { label, value, note, color }    lines: { stamp, text, color }
 -- ---------------------------------------------------------
+local ENV_NAMES = { FALLING = "a fall", DROWNING = "drowning", LAVA = "lava", FIRE = "fire", SLIME = "slime", FATIGUE = "fatigue" }
+local function Killer(by)
+    if not by then return "something" end
+    return ENV_NAMES[by] or by
+end
+
 local function EventLine(e)
     local k = e.k
     if k == "LEVEL" then return string.format("Reached level %d.", e.v or 0), "green"
-    elseif k == "DEATH" then return string.format("Died to %s.", e.by or "something"), "red"
+    elseif k == "DEATH" then return string.format("%s %s.", e.pvp and "Killed by" or "Died to", Killer(e.by)), "red"
+    elseif k == "PVP_KILL" then return string.format("Killed %s (player).", e.who or "?")
+    elseif k == "BIND" then return string.format("Home is now %s.", e.n or "?")
+    elseif k == "WON" then return string.format("Won the roll for %s%s.", e.n or "?", e.roll and (" with a " .. e.roll) or "")
+    elseif k == "TRADE" then return string.format("Traded with %s%s%s.", e.who or "?",
+        e.got and (": got " .. table.concat(e.got, ", ")) or "", e.gave and ((e.got and ", gave " or ": gave ") .. table.concat(e.gave, ", ")) or "")
+    elseif k == "MAIL" then return string.format("Mailed %s%s%s.", e.to or "?", e.items and (" " .. e.items .. " items") or "", e.gold and (" " .. Coin(e.gold)) or "")
     elseif k == "ALIVE" then return e.ghost and "Released spirit." or string.format("Back among the living after %ds.", e.dur or 0)
     elseif k == "KILL" then return string.format("Killed %s%s.", e.n or "?", e.xp and (" (+" .. e.xp .. " xp)") or "")
     elseif k == "QUEST_ACC" then return string.format("Took quest: %s.", e.n or e.q)
@@ -118,9 +130,8 @@ function CONTENT.overview()
         { "In purse", Coin(GetMoney()) },
         { header = "SOCIAL" },
         { "Duels", tostring(c.duels), DuelNote(char.events) },
-        { "Duel requests", tostring(c.duelRequests), "not accepted" },
-        { "Party invites", tostring(c.partyInvites) },
-        { "Gz received", tostring(c.gz) },
+        { "Invites", tostring(c.duelRequests + c.partyInvites), string.format("%d duel · %d party", c.duelRequests, c.partyInvites) },
+        { "PvP", tostring(c.pvpKills), string.format("%d kills · %d deaths · %d honorable", c.pvpKills, c.pvpDeaths, c.honorKills) },
         { header = "TIME" },
         { "Played", ns.Duration(played), string.format("%d sessions", #char.sessions) },
         { "This session", ns.Duration(ns.Now() - (ns.session and ns.session.t0 or ns.Now())), ns.paused and "paused" or "recording" },
@@ -156,7 +167,7 @@ function CONTENT.journey()
     local n = 0
     for i = #char.events, 1, -1 do
         local e = char.events[i]
-        if e.k == "TAXI" or e.k == "HEARTH" or e.k == "DISCOVER" or e.k == "INST_IN" then
+        if e.k == "TAXI" or e.k == "HEARTH" or e.k == "DISCOVER" or e.k == "INST_IN" or e.k == "BIND" then
             local text, color = EventLine(e)
             if text then tinsert(lines, { Day(e.t), text, color }); n = n + 1 end
             if n >= 14 then break end
@@ -217,7 +228,7 @@ function CONTENT.combat()
     for i = #ns.char.events, 1, -1 do
         local e = ns.char.events[i]
         if e.k == "DEATH" then
-            local who = e.by or "Unknown"
+            local who = Killer(e.by)
             if e.lvl then who = string.format("%s (%d)", who, e.lvl) end
             tinsert(lines, { Day(e.t), string.format("%s%s, %s.", e.l and ("Lvl " .. e.l .. " · ") or "", who, e.z or "?"), "red" })
             d = d + 1
@@ -241,6 +252,19 @@ function CONTENT.combat()
     end
     tinsert(lines, { title = "WEAPON SKILLS" })
     for _, s in ipairs(Top("skills", 6)) do tinsert(lines, { tostring(s.rec.v or s.rec.n), s.rec.nm or tostring(s.id) }) end
+    local env = Top("env", 6)
+    if #env > 0 then
+        tinsert(lines, { title = "THE WORLD ITSELF" })
+        for _, s in ipairs(env) do
+            local name = ENV_NAMES[s.id] or tostring(s.id):lower()
+            tinsert(lines, { tostring(s.rec.d or 0), string.format("damage from %s, %d times", name, s.rec.n or 0) })
+        end
+    end
+    local errs = Top("errors", 6)
+    if #errs > 0 then
+        tinsert(lines, { title = "MISHAPS" })
+        for _, s in ipairs(errs) do tinsert(lines, { tostring(s.rec.n), s.rec.nm or tostring(s.id) }) end
+    end
     return rows, lines
 end
 
@@ -258,17 +282,109 @@ function CONTENT.loot()
     local ctxs = {}
     for ctx in pairs(gold) do tinsert(ctxs, ctx) end
     table.sort(ctxs)
-    for _, ctx in ipairs(ctxs) do
+    table.sort(ctxs, function(a, b)
+        local ga, gb = gold[a], gold[b]
+        return math.abs((ga.i or 0) - (ga.o or 0)) > math.abs((gb.i or 0) - (gb.o or 0))
+    end)
+    for i = 1, math.min(8, #ctxs) do
+        local ctx = ctxs[i]
         local g = gold[ctx]
         local v = (g.i or 0) - (g.o or 0)
         tinsert(rows, { ctx:sub(1, 1):upper() .. ctx:sub(2), (v >= 0 and "+" or "-") .. Coin(math.abs(v)), "", v >= 0 and "green" or "red" })
     end
+    tinsert(rows, { header = "AUCTION HOUSE" })
+    tinsert(rows, { "Bought", tostring(c.ahBids + c.ahBuyouts), Coin(c.ahSpent) .. " spent" })
+    tinsert(rows, { "Posted", tostring(c.ahPosted) })
+    tinsert(rows, { "Sold", tostring(c.ahSold), Coin(c.ahSoldGold) .. " earned", "green" })
     local lines = { { title = "ITEMS LOOTED" } }
     for _, it in ipairs(Top("items", 10)) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
     tinsert(lines, { title = "ITEMS USED" })
     for _, it in ipairs(Top("used", 6)) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
+    tinsert(lines, { title = "BOUGHT" })
+    local bought = Top("bought", 6)
+    if #bought == 0 then tinsert(lines, { "", "Nothing yet." }) end
+    for _, it in ipairs(bought) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
+    tinsert(lines, { title = "SOLD" })
+    local sold = Top("sold", 6)
+    if #sold == 0 then tinsert(lines, { "", "Nothing yet." }) end
+    for _, it in ipairs(sold) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
     tinsert(lines, { title = "BUFFS FROM STRANGERS" })
     for _, it in ipairs(Top("buffs", 6)) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
+    local ah = Top("ahBought", 5)
+    if #ah > 0 then
+        tinsert(lines, { title = "AUCTION BUYS" })
+        for _, it in ipairs(ah) do tinsert(lines, { tostring(it.rec.n), string.format("%s, %s", it.rec.nm or tostring(it.id), Coin(it.rec.c or 0)) }) end
+    end
+    local posted = Top("ahPosted", 5)
+    if #posted > 0 then
+        tinsert(lines, { title = "AUCTION POSTS" })
+        for _, it in ipairs(posted) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
+    end
+    return rows, lines
+end
+
+-- Sort a tally by a field other than n (d for damage or healing amounts)
+local function TopBy(group, field, n)
+    local t = ns.char and ns.char.tallies[group] or {}
+    local list = {}
+    for id, rec in pairs(t) do tinsert(list, { id = id, rec = rec }) end
+    table.sort(list, function(a, b) return (a.rec[field] or 0) > (b.rec[field] or 0) end)
+    local out = {}
+    for i = 1, math.min(n, #list) do out[i] = list[i] end
+    return out
+end
+
+function CONTENT.friends()
+    local c, t = ns.char.counters, ns.char.tallies
+    local sent, got = 0, 0
+    for _, rec in pairs(t.whispers or {}) do sent = sent + (rec.o or 0); got = got + (rec.i or 0) end
+    local function SumN(group)
+        local n, friends = 0, 0
+        for _, rec in pairs(t[group] or {}) do n = n + (rec.n or 0); friends = friends + (rec.f or 0) end
+        return n, friends
+    end
+    local buffsIn, buffsInF = SumN("buffedBy")
+    local buffsOut, buffsOutF = SumN("buffedTo")
+    local rows = {
+        { header = "WHISPERS" },
+        { "Sent", tostring(sent) }, { "Received", tostring(got) },
+        { header = "HELP" },
+        { "Healing received", tostring(c.healingTaken) },
+        { "Resurrections", tostring(c.rezzes) },
+        { "Buffs received", tostring(buffsIn), string.format("%d party and guild · %d strangers", buffsInF, buffsIn - buffsInF) },
+        { "Buffs given", tostring(buffsOut), string.format("%d party and guild · %d strangers", buffsOutF, buffsOut - buffsOutF) },
+        { "Party invites", tostring(c.partyInvites) },
+        { header = "TRADING" },
+        { "Trades", tostring(c.trades) },
+        { "Mail sent", tostring(c.mailSent) },
+        { "Rolls", tostring(c.rolls), string.format("%d won", c.rollsWon) },
+        { header = "PVP" },
+        { "Player kills", tostring(c.pvpKills) },
+        { "Deaths to players", tostring(c.pvpDeaths), "", c.pvpDeaths > 0 and "red" or nil },
+        { "Honorable kills", tostring(c.honorKills) },
+    }
+    local lines = { { title = "WHISPERED MOST" } }
+    local w = Top("whispers", 6)
+    if #w == 0 then tinsert(lines, { "", "Nobody yet." }) end
+    for _, s in ipairs(w) do tinsert(lines, { tostring(s.rec.n), string.format("%s, %d sent · %d received", s.rec.nm or s.id, s.rec.o or 0, s.rec.i or 0) }) end
+    local function Section(title, list, fmt)
+        if #list == 0 then return end
+        tinsert(lines, { title = title })
+        for _, s in ipairs(list) do tinsert(lines, fmt(s)) end
+    end
+    Section("HEALED YOU", TopBy("healedBy", "d", 5), function(s) return { tostring(s.rec.d or 0), string.format("%s, %d heals", s.rec.nm or s.id, s.rec.n or 0) } end)
+    Section("YOU HEALED", TopBy("healedTo", "d", 5), function(s) return { tostring(s.rec.d or 0), string.format("%s, %d heals", s.rec.nm or s.id, s.rec.n or 0) } end)
+    Section("RESURRECTED YOU", Top("rezBy", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id) } end)
+    Section("BUFFED YOU", Top("buffedBy", 6), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id) } end)
+    Section("YOU BUFFED", Top("buffedTo", 6), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id) } end)
+    Section("TRADED WITH", Top("trades", 5), function(s)
+        return { tostring(s.rec.n), string.format("%s, got %d items · gave %d", s.rec.nm or s.id, s.rec.i or 0, s.rec.o or 0) } end)
+    Section("MAIL", Top("mailTo", 5), function(s)
+        return { tostring(s.rec.n), string.format("sent to %s, %d items", s.rec.nm or s.id, s.rec.i or 0) } end)
+    Section("LUCKIEST ROLLERS", TopBy("rolls", "w", 6), function(s)
+        return { tostring(s.rec.w or 0), string.format("%s, won %d of %d rolls, best %d", s.rec.nm or s.id, s.rec.w or 0, (s.rec.n or 0) + (s.rec.w or 0), s.rec.hi or 0) } end)
+    Section("PLAYERS YOU KILLED", Top("pvpKills", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id) } end)
+    Section("PLAYERS WHO KILLED YOU", Top("killedByPlayers", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id), "red" } end)
     return rows, lines
 end
 
@@ -376,7 +492,7 @@ local function Build()
     widgets.left:SetPoint("TOPLEFT", 24, -56)
     widgets.left:SetSize(LEFT_W, H - 56 - 52)
     widgets.rows = {}
-    for i = 1, 20 do
+    for i = 1, 23 do
         local r = CreateFrame("Button", nil, widgets.left)
         r:SetSize(LEFT_W - 12, ROW_H)
         r:SetPoint("TOPLEFT", 6, -6 - (i - 1) * ROW_H)
@@ -567,6 +683,8 @@ function ns.RefreshUI()
         else
             r:Show()
             if d.header then
+                r.label:ClearAllPoints()
+                r.label:SetPoint("LEFT", 6, 0)
                 r.label:SetText(d.header)
                 Font(r.label, skin.font, 11, skin.header)
                 r.value:SetText("")

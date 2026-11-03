@@ -1,5 +1,25 @@
 # Hearthlog changelog
 
+## 0.3.2
+- Friends tab: whispers per person (counts only, never the text), who healed you and who you healed, who
+  resurrected you, who buffed you, players you killed and players who killed you.
+- PvP: killing blows on players, deaths to players, honorable kills. Player kills stay out of the mob kill count.
+- Damage from the world itself (falling, drowning, lava, fire, fatigue) is tallied; deaths to it read "a fall".
+- Red-text mishaps counted by message ("Inventory is full.", "Spell is not ready yet.") on the Combat tab.
+- Vendor purchases and sales by item, on the Loot tab.
+- Hearthstone binds are logged ("Home is now Goldshire.").
+- Level-ups record gold on hand, total time played and talent points per tree alongside the gear snapshot.
+- Screenshots counted.
+- Loot rolls: every roll and win per player (luckiest rollers on the Friends tab); your wins are logged with the roll.
+- Trades: who, what changed hands and gold each way, logged on completion.
+- Mail: items taken from the inbox by sender, mail you sent by recipient with item and gold counts.
+- Auction house: bids, buyouts and gold spent by item, posts by item, sales and gold earned (read off the
+  "Auction successful" mail). Classic auction house only.
+- Buffs you gave to other players. Buffs each way are split into party and guild versus strangers.
+- Hunter and warlock pets: pet deaths and pet damage.
+- Gz is still counted but no longer shown on the Overview.
+- Window is a little taller so the Overview fits.
+
 ## 0.3.1
 - The window: `/hl` opens it instead of printing to chat. Overview, Journey, Combat, Loot and Settings tabs, with
   a scrolling log of what happened this session. Styled like the game's own dialogs, with a round portrait.

@@ -105,6 +105,76 @@ fire("DUEL_FINISHED")
 M.Advance(5)
 fire("PARTY_INVITE_REQUEST", "Danwar")
 
+-- 0.3.2 hooks: falling damage, rez, whispers, bind, red text, screenshot, vendor buy and sell, pvp
+M.cleu = { 0, "ENVIRONMENTAL_DAMAGE", false, nil, nil, 0, 0, "Player-1-000001", "Zinther", 0x511, 0, "FALLING", 37, 0, 1, 0, 0, 0, false }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.cleu = { 0, "SPELL_RESURRECT", false, "Player-1-000002", "Danwar", 0x512, 0, "Player-1-000001", "Zinther", 0x511, 0, 2006, "Resurrection", 2 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.cleu = { 0, "SPELL_HEAL", false, "Player-1-000002", "Danwar-Atiesh", 0x512, 0, "Player-1-000001", "Zinther", 0x511, 0, 2050, "Lesser Heal", 2, 60, 10, false }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+fire("CHAT_MSG_WHISPER", "hey", "Danwar-Atiesh")
+fire("CHAT_MSG_WHISPER", "u there", "Danwar-Atiesh")
+fire("CHAT_MSG_WHISPER_INFORM", "yeah", "Danwar-Atiesh")
+fire("CHAT_MSG_SYSTEM", "Goldshire is now your home.")
+fire("UI_ERROR_MESSAGE", 1, "Inventory is full.")
+fire("UI_ERROR_MESSAGE", 2, "Inventory is full.")
+fire("UI_ERROR_MESSAGE", 3, "Spell is not ready yet.")
+fire("SCREENSHOT_SUCCEEDED")
+M.merchant[1] = "|cffffffff|Hitem:159::::::::1:::::|h[Refreshing Spring Water]|h|r"
+BuyMerchantItem(1, 5)
+MerchantFrame.shown = true
+M.bags[0] = M.bags[0] or {}
+M.bags[0][9] = "|cff9d9d9d|Hitem:755::::::::1:::::|h[Broken Tooth]|h|r"
+C_Container.UseContainerItem(0, 9)
+MerchantFrame.shown = false
+M.cleu = { 0, "PARTY_KILL", false, "Player-1-000001", "Zinther", 0x511, 0, "Player-2-000077", "Stabbyjoe-Whitemane", 0x548, 0 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.cleu = { 0, "SWING_DAMAGE", false, "Player-2-000077", "Stabbyjoe-Whitemane", 0x548, 0, "Player-1-000001", "Zinther", 0x511, 0, 99 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.dead = true
+fire("PLAYER_DEAD")
+M.dead = false
+fire("PLAYER_UNGHOST")
+fire("PLAYER_ALIVE")
+
+-- Medium set: buff given, loot rolls, a trade, mail in and out, auction house, pet death
+M.cleu = { 0, "SPELL_AURA_APPLIED", false, "Player-1-000001", "Zinther", 0x511, 0, "Player-1-000002", "Danwar", 0x512, 0, 20217, "Blessing of Kings", 2, "BUFF" }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+local blue = "|cff0070dd|Hitem:5555::::::::1:::::|h[Blue Thing]|h|r"
+fire("CHAT_MSG_LOOT", "Need Roll - 97 for " .. blue .. " by you")
+fire("CHAT_MSG_LOOT", "Need Roll - 12 for " .. blue .. " by Danwar")
+fire("CHAT_MSG_LOOT", "You won: " .. blue)
+fire("CHAT_MSG_LOOT", "Greed Roll - 50 for " .. blue .. " by Danwar")
+fire("CHAT_MSG_LOOT", "Danwar won: " .. blue)
+M.units.NPC = { name = "Danwar-Atiesh", guid = "Player-1-000002" }
+M.trade.gave = { "|cffffffff|Hitem:2589::::::::1:::::|h[Linen Cloth]|h|r" }
+M.trade.got = { blue, "|cffffffff|Hitem:159::::::::1:::::|h[Refreshing Spring Water]|h|r" }
+M.trade.goldIn = 250
+fire("TRADE_SHOW")
+fire("TRADE_ACCEPT_UPDATE", 1, 1)
+fire("CHAT_MSG_SYSTEM", "Trade complete.")
+fire("TRADE_CLOSED")
+M.inbox[1] = { sender = "Danwar", subject = "stuff", money = 0, items = { blue } }
+M.inbox[2] = { sender = "Auction House", subject = "Auction successful: Linen Cloth", money = 1200, items = {} }
+TakeInboxItem(1, 1)
+AutoLootMailItem(2)
+TakeInboxMoney(2)              -- same mail, second hook: must not count twice
+fire("MAIL_INBOX_UPDATE")      -- mail gone, next one from the same lot slides into slot 2
+M.inbox[2] = { sender = "Auction House", subject = "Auction successful: Linen Cloth", money = 1200, items = {} }
+TakeInboxMoney(2)              -- identical mail, new take: must count
+M.sendMail.items = { blue }
+M.sendMail.money = 500
+SendMail("Danwar", "hi", "")
+M.auctions[3] = { name = "Light Leather", count = 5, quality = 1, minBid = 100, buyout = 400, itemId = 2318 }
+PlaceAuctionBid("list", 3, 400)
+PlaceAuctionBid("list", 3, 100)
+M.sellItem = { name = "Linen Cloth", count = 20, quality = 1 }
+PostAuction(50, 90, 2, 20, 2)
+M.units.pet = { name = "Growl", guid = "Pet-0-1-0-1-5-0009" }
+M.cleu = { 0, "UNIT_DIED", false, nil, nil, 0, 0, "Pet-0-1-0-1-5-0009", "Growl", 0x1111, 0 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.units.pet = nil
+
 -- Assists: Danwar (party flag 0x2) fights a wolf, we heal him, he kills it -> assist.
 -- Then he kills a boar we never touched and never healed him during -> partyKills only.
 M.cleu = { 0, "SWING_DAMAGE", false, "Player-1-000002", "Danwar", 0x512, 0, "Creature-0-1-0-1-299-0010", "Young Wolf", 0xa48, 0, 9 }
@@ -163,9 +233,9 @@ M.Advance(3)
 -- The window, both skins, every tab
 SlashCmdList.HEARTHLOG("")
 SlashCmdList.HEARTHLOG("ui b")
-for _, tab in ipairs({ "overview", "journey", "combat", "loot", "settings" }) do ns.ShowTab(tab) end
+for _, tab in ipairs({ "overview", "journey", "combat", "loot", "friends", "settings" }) do ns.ShowTab(tab) end
 SlashCmdList.HEARTHLOG("ui a")
-for _, tab in ipairs({ "overview", "journey", "combat", "loot", "settings" }) do ns.ShowTab(tab) end
+for _, tab in ipairs({ "overview", "journey", "combat", "loot", "friends", "settings" }) do ns.ShowTab(tab) end
 assert(HearthlogFrame and HearthlogFrame:IsShown(), "window did not open")
 SlashCmdList.HEARTHLOG("")
 assert(not HearthlogFrame:IsShown(), "window did not close")
@@ -221,9 +291,37 @@ assert kinds["DUEL"] == 1, "one DUEL event expected"
 print("duels OK: 1 fought, 1 declined, 1 party invite")
 assert c.assists == 1, "healing Danwar mid-fight should make his wolf kill an assist (got %s)" % c.assists
 assert c.partyKills == 1, "the untouched boar should be a party kill only (got %s)" % c.partyKills
-assert c.healingTaken == 0 and c.damageDone > 0, "damageDone/healingTaken counters"
+assert c.healingTaken == 50 and c.damageDone > 0, "damageDone/healingTaken counters (got %s)" % c.healingTaken
 assert "Food" not in [r.nm for r in char.tallies.spells.values()], "Food must not be a cast"
 print("assists OK: 1 assist via heal, 1 party kill ignored")
+t = char.tallies
+assert t.env["FALLING"].d == 37, "falling damage tally"
+assert c.rezzes == 1 and t.rezBy["Danwar"].n == 1, "rez by Danwar"
+assert t.healedBy["Danwar"].d == 50, "healedBy minus overheal (got %s)" % t.healedBy["Danwar"].d
+assert t.whispers["Danwar"].i == 2 and t.whispers["Danwar"].o == 1, "whispers in/out"
+assert c.binds == 1 and kinds["BIND"] == 1, "bind event"
+assert t.errors["Inventory is full."].n == 2, "error tally"
+assert c.screenshots == 1, "screenshot"
+assert t.bought[159].n == 5, "bought x5 (got %s)" % t.bought[159].n
+assert t.sold[755].n == 1 and 755 not in t.used, "sold, not used"
+assert c.pvpKills == 1 and t.pvpKills["Stabbyjoe"].n == 1 and kinds["PVP_KILL"] == 1, "pvp kill"
+assert c.pvpDeaths == 1 and t.killedByPlayers["Stabbyjoe"].n == 1, "pvp death"
+lvl = [e for e in char.events.values() if e.k == "LEVEL"][0]
+assert lvl.gold is not None and lvl.played is not None, "LEVEL carries gold and played"
+print("0.3.2 hooks OK: env, rez, heals by player, whispers, bind, errors, screenshot, bought/sold, pvp, level snapshot")
+assert t.buffedTo["Danwar"].n == 1, "buff given"
+assert c.rolls == 1 and c.rollsWon == 1 and kinds["WON"] == 1, "my roll and win"
+assert t.rolls["Zinther"].w == 1 and t.rolls["Zinther"].hi == 97, "my roll record"
+assert t.rolls["Danwar"].n == 2 and t.rolls["Danwar"].w == 1 and t.rolls["Danwar"].hi == 50, "Danwar rolls (got n=%s w=%s)" % (t.rolls["Danwar"].n, t.rolls["Danwar"].w)
+assert c.trades == 1 and t.trades["Danwar"].i == 2 and t.trades["Danwar"].o == 1 and t.trades["Danwar"].gi == 250, "trade"
+assert kinds["TRADE"] == 1, "trade event"
+assert c.mailItemsIn == 1 and t.mailFrom["Danwar"].n == 1, "mail item in"
+assert c.ahSold == 2 and c.ahSoldGold == 2400, "two lot sales counted, same mail not doubled (got %s/%s)" % (c.ahSold, c.ahSoldGold)
+assert c.mailSent == 1 and t.mailTo["Danwar"].i == 1 and t.mailTo["Danwar"].g == 500 and kinds["MAIL"] == 1, "mail sent"
+assert c.ahBuyouts == 1 and c.ahBids == 1 and c.ahSpent == 500 and t.ahBought[2318].n == 10, "auction buys (got n=%s)" % t.ahBought[2318].n
+assert c.ahPosted == 1 and t.ahPosted["Linen Cloth"].n == 40, "auction post"
+assert c.petDeaths == 1, "pet death"
+print("medium set OK: buffs given, rolls, trade, mail, auction house, pet")
 print("export round-trip: OK (%d events, %d maps)" % (len(dchar["events"]), len(dec["maps"])))
 t = char.tallies
 print("tallies:", {g: {k: dict(v.items()) for k, v in t[g].items()} for g in ["items", "used", "spells", "skills", "buffs", "emotes", "chat", "gold"]})

@@ -11,7 +11,12 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   QUEST_ACC  q=questID, n=name
 --   QUEST_DONE q=questID, n=name, xp=, gold=copper, dur=seconds since accept (if seen)
 --   QUEST_DROP q=questID, n=name
---   DEATH      by=killer name, npc=id, spell=, amt=, lvl=killer level, l=my level, party={..}, inst=instance name
+--   DEATH      by=killer name, npc=id, spell=, amt=, lvl=killer level, l=my level, pvp=true, party={..}, inst=instance name
+--   PVP_KILL   who=player name
+--   BIND       n=inn name (hearthstone set here)
+--   WON        n=item name, q=quality, roll=your roll (a loot roll you won)
+--   TRADE      who=, gave={item names}, got={item names}, gi=copper received, go=copper given
+--   MAIL       to=, items=count, gold=copper (mail you sent)
 --   ALIVE      ghost=true when released to ghost, res=name of who resurrected (if offered), dur=seconds dead
 --   KILL       n=mob name, npc=id, lvl=mob level, elite=true, rare=true, assist=true when a party member got the credit
 --   FIGHT      dur=seconds, taken=damage taken, healed=healing done, party={..}
@@ -43,6 +48,16 @@ local PARTY_FLAGS = 0x7        -- COMBATLOG_OBJECT_AFFILIATION_MINE | PARTY | RA
 local function IsGroupFlag(flags) return type(flags) == "number" and bit.band(flags, PARTY_FLAGS) ~= 0 end
 local levelOf = {}             -- GUID -> level, from whatever we target, mouse over or see on a nameplate
 local levelN = 0
+
+local function Short(name) return name and (name:match("^([^%-]+)") or name) or nil end
+local function IsPlayerOrPet(guid) return type(guid) == "string" and (guid:sub(1, 6) == "Player" or guid:sub(1, 3) == "Pet") end
+local function IsPlayer(guid) return type(guid) == "string" and guid:sub(1, 6) == "Player" end
+-- Turn one of the game's format strings ("%s won: %s") into a Lua pattern with captures
+local function Pat(fmt)
+    local s = fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+    s = s:gsub("%%d", "(%%d+)"):gsub("%%s", "(.-)")
+    return "^" .. s .. "$"
+end
 
 local function NoteLevel(unit)
     local guid = unit and UnitGUID(unit)
@@ -117,11 +132,30 @@ local function GearSnapshot()
     return gear
 end
 
+-- "Holy 0/Protection 5/Retribution 12" on clients with talent tabs, nil elsewhere
+local function TalentSnapshot()
+    local n = Call("GetNumTalentTabs")
+    if type(n) ~= "number" or n == 0 then return nil end
+    local parts = {}
+    for i = 1, n do
+        local name, _, spent = Call("GetTalentTabInfo", i)
+        if name then tinsert(parts, string.format("%s %d", name, tonumber(spent) or 0)) end
+    end
+    return #parts > 0 and table.concat(parts, "/") or nil
+end
+-- Total time played right now: the /played total at login plus this session so far
+local function PlayedNow()
+    local s = ns.session
+    if not s or not s.played then return nil end
+    return s.played + (Now() - s.t0)
+end
+
 ns.On("PLAYER_LEVEL_UP", function(level)
     local now = Now()
     ns.level = level
     local since = lastLevelT and (now - lastLevelT) or nil
-    Event("LEVEL", { v = level, since = since, gear = ns.Setting("gearSnapshot") and GearSnapshot() or nil })
+    Event("LEVEL", { v = level, since = since, gear = ns.Setting("gearSnapshot") and GearSnapshot() or nil,
+        gold = GetMoney(), played = PlayedNow(), talents = TalentSnapshot() })
     lastLevelT = now
     Count("levels")
     ns.lastLevelUpT = now -- Gz detection
@@ -165,6 +199,7 @@ end)
 
 -- "Discovered: Northshire Abbey"
 ns.On("UI_INFO_MESSAGE", function(_, msg)
+    if type(msg) == "string" and ns.TradeComplete and msg == (ERR_TRADE_COMPLETE or "Trade complete.") then ns.TradeComplete() end
     local area = type(msg) == "string" and msg:match("^Discovered: (.+)$")
     if not area then return end
     lastDiscoverT = Now()
@@ -228,6 +263,30 @@ local function InParty(name)
     return false
 end
 
+-- Guild roster names, so a buff from a guildie counts as a friend's even outside a party
+local guildNames = {}
+local function RefreshGuild()
+    local n = Call("GetNumGuildMembers")
+    if type(n) ~= "number" then return end
+    local names = {}
+    for i = 1, n do
+        local name = Call("GetGuildRosterInfo", i)
+        if name then names[Short(name)] = true end
+    end
+    guildNames = names
+end
+ns.On("GUILD_ROSTER_UPDATE", RefreshGuild)
+ns.On("PLAYER_ENTERING_WORLD", function()
+    C_Timer.After(6, function()
+        if not (IsInGuild and IsInGuild()) then return end
+        if C_GuildInfo and C_GuildInfo.GuildRoster then CallIn(C_GuildInfo, "GuildRoster") elseif GuildRoster then Call("GuildRoster") end
+    end)
+end)
+local function IsFriend(name)
+    local short = Short(name)
+    return short ~= nil and (InParty(short) or guildNames[short] == true)
+end
+
 local function OnCombatLog(...)
     local _, sub, _, srcGUID, srcName, srcFlags, _, dstGUID, dstName, dstFlags, _, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 = ...
     -- Who in the group is fighting which mob, so a heal on them counts as a hand in the kill
@@ -251,7 +310,12 @@ local function OnCombatLog(...)
         else spell = a2; amt = a4; crit = a10 end
         if type(amt) ~= "number" then amt = tonumber(amt) or 0 end
         local npc = ns.NpcId(srcGUID)
-        lastHit = { src = srcName, npc = npc, spell = spell, amt = amt, lvl = LevelOf(srcGUID), t = Now() }
+        lastHit = { src = srcName, npc = npc, spell = spell, amt = amt, lvl = LevelOf(srcGUID), t = Now(),
+            player = IsPlayerOrPet(srcGUID) and srcGUID ~= playerGUID or nil }
+        if sub == "ENVIRONMENTAL_DAMAGE" and type(a1) == "string" then
+            local rec = ns.Tally("env", a1, a1)
+            if rec then rec.d = (rec.d or 0) + amt end
+        end
         if fight then fight.taken = fight.taken + amt end
         ns.Max("maxHitTaken", amt)
         ns.Record("hitTaken", amt, { who = srcName, spell = spell, crit = crit == true or nil })
@@ -263,6 +327,13 @@ local function OnCombatLog(...)
         end
     elseif DAMAGE[sub] and ns.NpcId(dstGUID) and UnitGUID("pet") and srcGUID == UnitGUID("pet") then
         Engage(dstGUID)
+        local amt = (sub == "SWING_DAMAGE") and a1 or a4
+        Count("petDamage", tonumber(amt) or 0)
+    elseif sub == "UNIT_DIED" and UnitGUID("pet") and dstGUID == UnitGUID("pet") then
+        Count("petDeaths")
+    elseif srcGUID == playerGUID and sub == "SPELL_AURA_APPLIED" and a4 == "BUFF" and dstGUID ~= playerGUID and IsPlayer(dstGUID) and dstName then
+        local rec = ns.Tally("buffedTo", Short(dstName), Short(dstName))
+        if rec and IsFriend(dstName) then rec.f = (rec.f or 0) + 1 end
     elseif srcGUID == playerGUID and DAMAGE[sub] then
         local amt, crit, spell
         if sub == "SWING_DAMAGE" then amt = a1; crit = a7; Count("swings")
@@ -285,6 +356,10 @@ local function OnCombatLog(...)
         if srcGUID == playerGUID then
             if fight then fight.healed = fight.healed + amt end
             ns.Record("healDone", amt, { who = dstName, spell = a2 })
+            if dstGUID ~= playerGUID and IsPlayerOrPet(dstGUID) and dstName then
+                local rec = ns.Tally("healedTo", Short(dstName), Short(dstName))
+                if rec then rec.d = (rec.d or 0) + amt end
+            end
             -- Healing a group member counts as a hand in whatever they were fighting in the last half minute
             local foes = dstGUID ~= playerGUID and memberFoes[dstGUID]
             if foes then
@@ -297,16 +372,37 @@ local function OnCombatLog(...)
         if dstGUID == playerGUID and srcGUID ~= playerGUID then
             Count("healingTaken", amt)
             ns.Record("healTaken", amt, { who = srcName, spell = a2 })
+            if IsPlayerOrPet(srcGUID) and srcName then
+                local rec = ns.Tally("healedBy", Short(srcName), Short(srcName))
+                if rec then rec.d = (rec.d or 0) + amt end
+            end
         end
+    elseif sub == "SPELL_RESURRECT" and dstGUID == playerGUID and srcName then
+        Count("rezzes")
+        ns.Tally("rezBy", Short(srcName), Short(srcName))
     elseif dstGUID == playerGUID and sub == "SPELL_AURA_APPLIED" then
-        if IsPlayerGUID(srcGUID) and srcGUID ~= playerGUID and a4 == "BUFF" and not InParty(srcName) then
-            Count("strangerBuffs")
-            ns.Tally("buffs", a1, a2)
+        if IsPlayerGUID(srcGUID) and srcGUID ~= playerGUID and a4 == "BUFF" then
+            if srcName then
+                local rec = ns.Tally("buffedBy", Short(srcName), Short(srcName))
+                if rec and IsFriend(srcName) then rec.f = (rec.f or 0) + 1 end
+            end
+            if not IsFriend(srcName) then
+                Count("strangerBuffs")
+                ns.Tally("buffs", a1, a2)
+            end
         end
     elseif sub == "PARTY_KILL" then
         local mine = srcGUID == playerGUID or (UnitGUID("pet") and srcGUID == UnitGUID("pet"))
         local npc = ns.NpcId(dstGUID)
-        if not npc then return end -- Players and pets are not kills for this count
+        if not npc then
+            -- Players: our own killing blows on another player are PvP kills (pets are not)
+            if mine and type(dstGUID) == "string" and dstGUID:sub(1, 6) == "Player" and dstName then
+                Count("pvpKills")
+                ns.Tally("pvpKills", Short(dstName), Short(dstName))
+                Event("PVP_KILL", { who = Short(dstName) })
+            end
+            return
+        end
         -- A party member's kill counts as an assist when we had a hand in it: we hit it, it hit us,
         -- or we healed someone it was fighting. Kills we had nothing to do with are only counted.
         if not mine then
@@ -368,6 +464,11 @@ ns.On("PLAYER_DEAD", function()
     if lastHit and Now() - lastHit.t <= 15 then
         e.by, e.npc, e.spell, e.amt, e.lvl = lastHit.src, lastHit.npc, lastHit.spell, lastHit.amt, lastHit.lvl
         if lastHit.npc then ns.Tally("killers", lastHit.npc, lastHit.src) end
+        if lastHit.player and lastHit.src then
+            e.pvp = true
+            Count("pvpDeaths")
+            ns.Tally("killedByPlayers", Short(lastHit.src), Short(lastHit.src))
+        end
     end
     Event("DEATH", e)
     -- Wipe: everyone in the party dead a moment later
@@ -598,7 +699,13 @@ local function TradingWindowOpen()
     return false
 end
 local function UsedItem(link)
-    if not link or TradingWindowOpen() then return end
+    if not link then return end
+    if MerchantFrame and MerchantFrame.IsShown and MerchantFrame:IsShown() then
+        -- Right-clicking a bag item at a vendor sells it
+        ns.Tally("sold", ns.ItemId(link), ns.LinkName(link), { q = ns.LinkQuality(link) })
+        return
+    end
+    if TradingWindowOpen() then return end
     local equippable = Call("IsEquippableItem", link)
     if equippable then return end
     ns.Tally("used", ns.ItemId(link), ns.LinkName(link), { q = ns.LinkQuality(link) })
@@ -620,6 +727,14 @@ if hooksecurefunc then
                 local _, link = Call("GetItemInfo", id)
                 if link then UsedItem(link) else ns.Tally("used", id, nil) end
             end
+        end)
+    end
+    if BuyMerchantItem then
+        hooksecurefunc("BuyMerchantItem", function(index, quantity)
+            local link = Call("GetMerchantItemLink", index)
+            if not link then return end
+            local rec = ns.Tally("bought", ns.ItemId(link), ns.LinkName(link), { q = ns.LinkQuality(link) })
+            if rec and type(quantity) == "number" and quantity > 1 then rec.n = rec.n + quantity - 1 end
         end)
     end
     if UseItemByName then
@@ -664,6 +779,13 @@ ns.On("DUEL_FINISHED", function()
 end)
 ns.On("CHAT_MSG_SYSTEM", function(msg)
     if type(msg) ~= "string" then return end
+    if ns.TradeComplete and msg == (ERR_TRADE_COMPLETE or "Trade complete.") then ns.TradeComplete() return end
+    local home = msg:match("^(.-) is now your home%.?$")
+    if home then
+        Count("binds")
+        Event("BIND", { n = home })
+        return
+    end
     local winner, loser = msg:match("^(.-) has defeated (.-) in a duel")
     if not winner then
         winner, loser = msg:match("^(.-) has fled from (.-) in a duel")
@@ -743,6 +865,184 @@ ns.On("CHAT_MSG_RAID", CountChat("raid"))
 ns.On("CHAT_MSG_GUILD", CountChat("guild"))
 ns.On("CHAT_MSG_WHISPER_INFORM", CountChat("whisper"))
 ns.On("CHAT_MSG_CHANNEL", CountChat("channel"))
+
+-- ---------------------------------------------------------
+-- Loot rolls: "Need Roll - 97 for [item] by Danwar", "Danwar won: [item]", "You won: [item]"
+-- ---------------------------------------------------------
+local ROLL_PATS = { -- "by you" first, or the "by %s" form would catch it with a player named "you"
+    { Pat(LOOT_ROLL_ROLLED_NEED_SELF or "Need Roll - %d for %s by you"), true },
+    { Pat(LOOT_ROLL_ROLLED_GREED_SELF or "Greed Roll - %d for %s by you"), true },
+    { Pat(LOOT_ROLL_ROLLED_NEED or "Need Roll - %d for %s by %s"), false },
+    { Pat(LOOT_ROLL_ROLLED_GREED or "Greed Roll - %d for %s by %s"), false },
+}
+local WON_PAT = Pat(LOOT_ROLL_WON or "%s won: %s")
+local YOU_WON_PAT = Pat(LOOT_ROLL_YOU_WON or "You won: %s")
+local myLastRoll = nil
+ns.On("CHAT_MSG_LOOT", function(msg)
+    if type(msg) ~= "string" then return end
+    for _, p in ipairs(ROLL_PATS) do
+        local roll, item, who = msg:match(p[1])
+        if roll then
+            roll = tonumber(roll)
+            who = p[2] and UnitName("player") or Short(who)
+            if not who then return end
+            local rec = ns.Tally("rolls", who, who)
+            if rec then
+                rec.s = (rec.s or 0) + roll
+                if roll > (rec.hi or 0) then rec.hi = roll end
+            end
+            if p[2] then Count("rolls"); myLastRoll = roll end
+            return
+        end
+    end
+    local item = msg:match(YOU_WON_PAT)
+    local who = item and UnitName("player")
+    if not item then who, item = msg:match(WON_PAT); who = Short(who) end
+    if not item or not who then return end
+    local rec = ns.Tally("rolls", who, who)
+    if rec then rec.n = rec.n - 1; rec.w = (rec.w or 0) + 1 end -- a win is not another roll
+    if who == UnitName("player") then
+        Count("rollsWon")
+        Event("WON", { n = ns.LinkName(item) or item, q = ns.LinkQuality(item), roll = myLastRoll })
+        myLastRoll = nil
+    end
+end)
+
+-- ---------------------------------------------------------
+-- Trades: snapshot the window as it changes, commit on "Trade complete."
+-- ---------------------------------------------------------
+local tradeSnap = nil
+local function SnapTrade()
+    local who = Short(UnitName("NPC"))
+    if not who then return end
+    local gave, got = {}, {}
+    for i = 1, 6 do
+        local l = Call("GetTradePlayerItemLink", i)
+        if l then tinsert(gave, ns.LinkName(l) or "?") end
+        l = Call("GetTradeTargetItemLink", i)
+        if l then tinsert(got, ns.LinkName(l) or "?") end
+    end
+    tradeSnap = { who = who, gave = gave, got = got,
+        go = tonumber(Call("GetPlayerTradeMoney")) or 0, gi = tonumber(Call("GetTargetTradeMoney")) or 0, t = Now() }
+end
+for _, ev in ipairs({ "TRADE_SHOW", "TRADE_ACCEPT_UPDATE", "TRADE_PLAYER_ITEM_CHANGED", "TRADE_TARGET_ITEM_CHANGED", "TRADE_MONEY_CHANGED" }) do
+    ns.On(ev, SnapTrade)
+end
+ns.On("TRADE_CLOSED", function() C_Timer.After(2, function() tradeSnap = nil end) end)
+function ns.TradeComplete()
+    local s = tradeSnap
+    tradeSnap = nil
+    if not s or Now() - s.t > 120 then return end
+    Count("trades")
+    local rec = ns.Tally("trades", s.who, s.who)
+    if rec then
+        rec.i = (rec.i or 0) + #s.got
+        rec.o = (rec.o or 0) + #s.gave
+        rec.gi = (rec.gi or 0) + s.gi
+        rec.go = (rec.go or 0) + s.go
+    end
+    Event("TRADE", { who = s.who, gave = #s.gave > 0 and s.gave or nil, got = #s.got > 0 and s.got or nil,
+        gi = s.gi > 0 and s.gi or nil, go = s.go > 0 and s.go or nil })
+end
+
+-- ---------------------------------------------------------
+-- Mail: items taken from the inbox (by sender), mail sent (by recipient). Auction sales arrive as mail.
+-- ---------------------------------------------------------
+local AH_SOLD_PAT = Pat(AUCTION_SOLD_MAIL_SUBJECT or "Auction successful: %s")
+-- Money from one mail must be credited once even if two hooks fire for it (auto-loot, then take money),
+-- while five identical "Auction successful" mails from one lot sale must each count. The key includes the
+-- inbox slot and the mail's own expiry, and the table is cleared whenever the inbox changes.
+local seenMail = {}
+ns.On("MAIL_INBOX_UPDATE", function() seenMail = {} end)
+local function InboxItem(index, link)
+    if not link then return end
+    local _, _, sender, subject = Call("GetInboxHeaderInfo", index)
+    sender = Short(sender) or "?"
+    Count("mailItemsIn")
+    local rec = ns.Tally("mailFrom", sender, sender)
+    if rec and subject and subject:match(AH_SOLD_PAT) then rec.ah = (rec.ah or 0) + 1 end
+end
+local function InboxMoney(index)
+    local _, _, sender, subject, money, _, daysLeft = Call("GetInboxHeaderInfo", index)
+    if type(subject) ~= "string" or not subject:match(AH_SOLD_PAT) then return end
+    local key = table.concat({ tostring(index), tostring(sender), subject, tostring(money), tostring(daysLeft) }, "|")
+    if seenMail[key] then return end
+    seenMail[key] = true
+    Count("ahSold")
+    Count("ahSoldGold", tonumber(money) or 0)
+end
+if hooksecurefunc then
+    if TakeInboxItem then
+        hooksecurefunc("TakeInboxItem", function(index, itemIndex) InboxItem(index, Call("GetInboxItemLink", index, itemIndex)) end)
+    end
+    if TakeInboxMoney then hooksecurefunc("TakeInboxMoney", function(index) InboxMoney(index) end) end
+    if AutoLootMailItem then
+        hooksecurefunc("AutoLootMailItem", function(index)
+            for i = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do InboxItem(index, Call("GetInboxItemLink", index, i)) end
+            InboxMoney(index)
+        end)
+    end
+    if SendMail then
+        hooksecurefunc("SendMail", function(recipient)
+            local to = Short(recipient)
+            if not to or to == "" then return end
+            local items = 0
+            for i = 1, (ATTACHMENTS_MAX_SEND or 12) do
+                if Call("GetSendMailItemLink", i) then items = items + 1 end
+            end
+            local gold = tonumber(Call("GetSendMailMoney")) or 0
+            Count("mailSent")
+            local rec = ns.Tally("mailTo", to, to)
+            if rec then rec.i = (rec.i or 0) + items; rec.g = (rec.g or 0) + gold end
+            Event("MAIL", { to = to, items = items > 0 and items or nil, gold = gold > 0 and gold or nil })
+        end)
+    end
+
+    -- Auction house (the Classic API; Retail's C_AuctionHouse is not covered)
+    if PlaceAuctionBid and GetAuctionItemInfo then
+        hooksecurefunc("PlaceAuctionBid", function(kind, index, bid)
+            local name, _, count, quality, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = Call("GetAuctionItemInfo", kind, index)
+            if not name then return end
+            bid = tonumber(bid) or 0
+            Count("ahSpent", bid)
+            if buyout and buyout > 0 and bid >= buyout then Count("ahBuyouts") else Count("ahBids") end
+            local rec = ns.Tally("ahBought", itemId or name, name, { q = quality })
+            if rec then rec.n = rec.n + (tonumber(count) or 1) - 1; rec.c = (rec.c or 0) + bid end
+        end)
+    end
+    local function Posted(minBid, buyout, runTime, stackSize, numStacks)
+        local name, _, count, quality = Call("GetAuctionSellItemInfo")
+        if not name then return end
+        local total = (tonumber(stackSize) or tonumber(count) or 1) * (tonumber(numStacks) or 1)
+        Count("ahPosted")
+        local rec = ns.Tally("ahPosted", name, name, { q = quality })
+        if rec then rec.n = rec.n + total - 1 end
+    end
+    if PostAuction then hooksecurefunc("PostAuction", Posted) elseif StartAuction then hooksecurefunc("StartAuction", Posted) end
+end
+
+-- Whispers per person: who, how many each way. Never the text.
+ns.On("CHAT_MSG_WHISPER", function(msg, sender)
+    local who = Short(sender)
+    if not who or who == "" then return end
+    local rec = ns.Tally("whispers", who, who)
+    if rec then rec.i = (rec.i or 0) + 1 end
+end)
+ns.On("CHAT_MSG_WHISPER_INFORM", function(msg, target)
+    local who = Short(target)
+    if not who or who == "" then return end
+    local rec = ns.Tally("whispers", who, who)
+    if rec then rec.o = (rec.o or 0) + 1 end
+end)
+
+-- "Inventory is full", "Spell is not ready yet", "Out of range": the game's red text, counted by message
+ns.On("UI_ERROR_MESSAGE", function(a, b)
+    local msg = type(b) == "string" and b or (type(a) == "string" and a) or nil
+    if not msg or #msg == 0 or #msg > 60 then return end
+    ns.Tally("errors", msg, msg)
+end)
+ns.On("SCREENSHOT_SUCCEEDED", function() Count("screenshots") end)
+ns.On("PLAYER_PVP_KILLS_CHANGED", function() Count("honorKills") end)
 
 ns.On("CHAT_MSG_GUILD", OnChat("guild"))
 ns.On("CHAT_MSG_PARTY", OnChat("party"))

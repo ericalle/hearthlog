@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.1"
+ns.VERSION = "0.3.2"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -20,17 +20,21 @@ ns.Print = Print
 function ns.Call(name, ...)
     local fn = _G[name]
     if type(fn) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f = pcall(fn, ...)
-    if ok then return a, b, c, d, e, f end
-    return nil
+    local function keep(ok, ...)
+        if ok then return ... end
+        return nil
+    end
+    return keep(pcall(fn, ...))
 end
 
 -- CallIn(tbl, fn, ...): protected call of C_Something.Function
 function ns.CallIn(tbl, name, ...)
     if type(tbl) ~= "table" or type(tbl[name]) ~= "function" then return nil end
-    local ok, a, b, c, d, e, f = pcall(tbl[name], ...)
-    if ok then return a, b, c, d, e, f end
-    return nil
+    local function keep(ok, ...)
+        if ok then return ... end
+        return nil
+    end
+    return keep(pcall(tbl[name], ...))
 end
 
 -- Server time (epoch seconds), the one clock every record uses so that two

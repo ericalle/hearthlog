@@ -196,6 +196,32 @@ _G.IsEquippableItem = function(link) return link and link:find("Cloak") ~= nil e
 _G.RepairAllItems = function() end
 _G.ChatFrameUtil = { DisplayTimePlayed = function() print("PLAYED LINE LEAKED") end }
 _G.MerchantFrame = { shown = false, IsShown = function(self) return self.shown end }
+M.merchant = {}
+-- Trade, mail and auction house stubs (hooked by Events.lua at load)
+M.trade = { gave = {}, got = {}, goldOut = 0, goldIn = 0 }
+_G.GetTradePlayerItemLink = function(i) return M.trade.gave[i] end
+_G.GetTradeTargetItemLink = function(i) return M.trade.got[i] end
+_G.GetPlayerTradeMoney = function() return M.trade.goldOut end
+_G.GetTargetTradeMoney = function() return M.trade.goldIn end
+M.inbox = {}
+_G.GetInboxHeaderInfo = function(i) local m = M.inbox[i]; if m then return nil, nil, m.sender, m.subject, m.money end end
+_G.GetInboxItemLink = function(i, j) return M.inbox[i] and M.inbox[i].items[j] end
+_G.TakeInboxItem = function(i, j) end
+_G.TakeInboxMoney = function(i) end
+_G.AutoLootMailItem = function(i) end
+M.sendMail = { items = {}, money = 0 }
+_G.GetSendMailItemLink = function(i) return M.sendMail.items[i] end
+_G.GetSendMailMoney = function() return M.sendMail.money end
+_G.SendMail = function(to, subject, body) end
+M.auctions = {}
+_G.GetAuctionItemInfo = function(kind, i) local a = M.auctions[i]
+    if a then return a.name, nil, a.count, a.quality, true, 0, nil, a.minBid, 0, a.buyout, 0, false, nil, nil, nil, nil, a.itemId, true end end
+_G.PlaceAuctionBid = function(kind, i, bid) end
+M.sellItem = nil
+_G.GetAuctionSellItemInfo = function() local s = M.sellItem; if s then return s.name, nil, s.count, s.quality, true, 0 end end
+_G.PostAuction = function(minBid, buyout, runTime, stackSize, numStacks) end
+_G.GetMerchantItemLink = function(i) return M.merchant[i] end
+_G.BuyMerchantItem = function(i, qty) end
 _G.GetQuestLogTitle = function(i) return "Quest at index " .. i end
 
 -- World state
