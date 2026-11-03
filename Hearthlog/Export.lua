@@ -4,10 +4,9 @@ local Print = ns.Print
 -- =========================================================
 -- EXPORT: the character's data as a paste-able string
 -- =========================================================
--- A plain serialization of char (same content as the SavedVariables file),
--- shown in a window with the text selected. Big journeys are better sent as
--- the file itself: WTF/Account/<ACCOUNT>/SavedVariables/Hearthlog.lua
--- Format: HL1 header, then the Lua table literal.
+-- The character's data serialized, compressed and base64-encoded into one
+-- string, shown in a window with the text selected. The SavedVariables file
+-- (WTF/Account/<ACCOUNT>/SavedVariables/Hearthlog.lua) holds the same data.
 
 local function Serialize(v, out, depth)
     local t = type(v)
@@ -44,10 +43,59 @@ local function Serialize(v, out, depth)
     end
 end
 
-function ns.ExportString()
-    local out = { "HL1:" }
-    Serialize({ key = ns.key, maps = ns.db.maps, char = ns.char }, out, 0)
+-- ---------------------------------------------------------
+-- LZW + base64: one dense string, like other addons' export strings.
+-- Header "HL2:". tools/load.py decodes it. (HL1: was the raw table literal.)
+-- ---------------------------------------------------------
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function Base64(bytes)
+    local out = {}
+    for i = 1, #bytes, 3 do
+        local a, b, c = bytes:byte(i, i + 2)
+        local n = a * 65536 + (b or 0) * 256 + (c or 0)
+        local c1 = math.floor(n / 262144) % 64
+        local c2 = math.floor(n / 4096) % 64
+        local c3 = math.floor(n / 64) % 64
+        local c4 = n % 64
+        tinsert(out, B64:sub(c1 + 1, c1 + 1) .. B64:sub(c2 + 1, c2 + 1)
+            .. (b and B64:sub(c3 + 1, c3 + 1) or "=") .. (c and B64:sub(c4 + 1, c4 + 1) or "="))
+    end
     return table.concat(out)
+end
+
+-- LZW with 16-bit codes, written as two bytes each. The dictionary resets at 65535 entries.
+local function LZW(input)
+    local dict, size = {}, 256
+    for i = 0, 255 do dict[string.char(i)] = i end
+    local out, w = {}, ""
+    local function emit(code) tinsert(out, string.char(math.floor(code / 256), code % 256)) end
+    for i = 1, #input do
+        local c = input:sub(i, i)
+        local wc = w .. c
+        if dict[wc] then
+            w = wc
+        else
+            emit(dict[w])
+            if size < 65535 then
+                dict[wc] = size
+                size = size + 1
+            else
+                dict, size = {}, 256
+                for j = 0, 255 do dict[string.char(j)] = j end
+            end
+            w = c
+        end
+    end
+    if w ~= "" then emit(dict[w]) end
+    return table.concat(out)
+end
+
+function ns.ExportString()
+    local out = {}
+    Serialize({ key = ns.key, maps = ns.db.maps, char = ns.char }, out, 0)
+    local raw = table.concat(out)
+    return "HL2:" .. Base64(LZW(raw))
 end
 
 local frame
@@ -68,7 +116,7 @@ local function Window()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     title:SetPoint("TOP", 0, -16)
-    title:SetText("Hearthlog export: Ctrl+C to copy, then paste to Eric")
+    title:SetText("Hearthlog export (Ctrl+C to copy)")
 
     local scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", 20, -40)
@@ -98,5 +146,5 @@ function ns.ShowExport()
     f:Show()
     f.box:SetFocus()
     f.box:HighlightText()
-    Print(string.format("export is %d KB. Over a few hundred KB, send the SavedVariables file instead.", math.floor(#text / 1024)))
+    Print(string.format("export string: %d KB", math.floor(#text / 1024)))
 end

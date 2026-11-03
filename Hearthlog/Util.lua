@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.0"
+ns.VERSION = "0.3.1"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -104,7 +104,7 @@ function ns.PartyList()
     for i = 1, count do
         local unit = prefix .. i
         local name = UnitName(unit)
-        if name and name ~= UnitName("player") then
+        if name and name ~= UnitName("player") and name ~= "Unknown" and name ~= UNKNOWNOBJECT then
             local _, class = UnitClass(unit)
             tinsert(list, name .. ":" .. (class or "?"))
         end

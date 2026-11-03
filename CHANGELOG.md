@@ -1,5 +1,25 @@
 # Hearthlog changelog
 
+## 0.3.1
+- The window: `/hl` opens it instead of printing to chat. Overview, Journey, Combat, Loot and Settings tabs, with
+  a scrolling log of what happened this session. Styled like the game's own dialogs, with a round portrait.
+- Settings tab: chat checkboxes (login line, version notice, level-up summary), the Pause, Versions and Export
+  buttons, and where the data file lives.
+- Kills now include assists. A party member's kill is an assist when you had a hand in it: you or your pet hit
+  the mob, it hit you, or you healed a group member while they were fighting it. Party kills you had no part in
+  are only counted (`partyKills`). Killing blows are still kept separately.
+- Combat tab: biggest hit given and taken show the ability and who; damage done, healing received, biggest heals;
+  deaths show your level and the mob's; killed-by and hurt-most-by lists. Mob levels are recorded on kills and deaths.
+- Duels only count when actually fought (the game fires its finished event for declined requests too). Declined duel
+  requests and party invites are counted on the Overview.
+- The hidden login-effect spell and Food/Drink no longer show up as casts.
+- Quieter by default: the only chat line is the login line, and it can be turned off.
+- Party: members whose names have not loaded yet are ignored; the roster is re-checked a few seconds after login
+  and after each update, and the party you were already in at login is recorded.
+- `/hl status` shows assists.
+- `/hl export` gives one compressed string (`HL2:...`) instead of a raw dump, about a fifth the size. `tools/load.py`
+  reads these strings as well as SavedVariables files.
+
 ## 0.3.0
 - Version exchange over addon messages: login announces to the guild, grouping announces to the party, and anyone
   who hears a newer version gets one chat line pointing at the releases page.

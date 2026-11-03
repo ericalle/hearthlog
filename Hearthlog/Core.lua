@@ -32,12 +32,13 @@ local DEFAULT_COUNTERS = {
     fights = 0, fightSeconds = 0, damageTaken = 0, healingDone = 0, gz = 0, duels = 0,
     samples = 0, idleSeconds = 0, teleports = 0, discoveries = 0,
     swings = 0, swingMisses = 0, shots = 0, casts = 0, critsDone = 0, critsTaken = 0,
-    maxHitDone = 0, maxHitTaken = 0, dodged = 0, parried = 0,
+    maxHitDone = 0, maxHitTaken = 0, dodged = 0, parried = 0, partyKills = 0, damageDone = 0, healingTaken = 0,
+    duelRequests = 0, partyInvites = 0,
     meals = 0, drinks = 0, foodSeconds = 0, drinkSeconds = 0, strangerBuffs = 0,
     lootItems = 0, lootGray = 0, lootWhite = 0, emotes = 0, messages = 0,
     miles = { f = 0, m = 0, t = 0, s = 0, g = 0, v = 0, b = 0 },
 }
-local TALLIES = { "items", "used", "spells", "skills", "buffs", "emotes", "chat", "gold" }
+local TALLIES = { "items", "used", "spells", "skills", "buffs", "emotes", "chat", "gold", "killers", "hurtBy" }
 
 local function Fill(dst, src)
     for k, v in pairs(src) do
@@ -79,13 +80,26 @@ end)
 -- ---------------------------------------------------------
 -- Database
 -- ---------------------------------------------------------
+local DEFAULT_SETTINGS = {
+    ui = "b",              -- window skin (only "b" exists now)
+    loginLine = true,      -- "recording X" line at login
+    versionNotice = true,  -- one line when a friend runs a newer build
+    levelSummary = false,  -- a chat line on each level-up
+    countJumps = true,
+    gearSnapshot = true,
+}
+
 local function InitDB()
     HearthlogDB = HearthlogDB or {}
     local db = HearthlogDB
     db.schema = db.schema or ns.SCHEMA
     db.maps = db.maps or {}
     db.chars = db.chars or {}
+    db.settings = Fill(db.settings or {}, DEFAULT_SETTINGS)
     ns.db = db
+end
+function ns.Setting(key)
+    return ns.db and ns.db.settings and ns.db.settings[key]
 end
 
 local function InitChar()
@@ -102,6 +116,13 @@ local function InitChar()
     char.tallies = char.tallies or {}
     for _, name in ipairs(TALLIES) do char.tallies[name] = char.tallies[name] or {} end
     char.probe = char.probe or { events = {} }
+    char.records = char.records or {}
+    if ns.db.settings and ns.db.settings.ui ~= "b" then ns.db.settings.ui = "b" end
+    -- Spells the game casts on its own (login effect, auto attack) are not casts; drop any already tallied
+    for id in pairs(ns.AUTO_SPELLS or {}) do char.tallies.spells[id] = nil end
+    for id, rec in pairs(char.tallies.spells) do
+        if rec.nm == "Food" or rec.nm == "Drink" then char.tallies.spells[id] = nil end
+    end
     ns.level = UnitLevel("player")
 
     local _, class = UnitClass("player")
@@ -228,6 +249,19 @@ function ns.Max(key, v)
     if v > (c[key] or 0) then c[key] = v end
 end
 
+-- Personal bests: ns.Record("hitDone", 23, { spell = "Holy Light", who = "Kobold Worker" })
+-- Keeps the record with the largest v, plus whatever details came with it.
+function ns.Record(key, v, info)
+    if ns.paused or not ns.char or type(v) ~= "number" then return end
+    local r = ns.char.records
+    if not r then r = {}; ns.char.records = r end
+    if v > ((r[key] and r[key].v) or 0) then
+        local rec = { v = v, t = Now() }
+        if info then for k, val in pairs(info) do rec[k] = val end end
+        r[key] = rec
+    end
+end
+
 -- Per-id tally: ns.Tally("items", 2589, "Linen Cloth", { q = 1 })
 function ns.Tally(group, id, name, extra)
     if ns.paused or not ns.char or id == nil then return end
@@ -261,8 +295,8 @@ local function Status()
     Print(string.format("session %d started %s ago  ·  %s  ·  %d samples this session, %d events total",
         ns.sessionIndex, ns.Duration(Now() - ns.session.t0), ns.paused and "|cffff5555PAUSED|r" or "recording",
         samplesNow, #char.events))
-    Print(string.format("kills %d  deaths %d  quests %d/%d  levels +%d  jumps %d  gold +%s/-%s",
-        c.kills, c.deaths, c.questsDone, c.questsAccepted, c.levels, c.jumps,
+    Print(string.format("kills %d (assists %d)  deaths %d  quests %d/%d  levels +%d  jumps %d  gold +%s/-%s",
+        c.kills, c.assists, c.deaths, c.questsDone, c.questsAccepted, c.levels, c.jumps,
         GetCoinTextureString and GetCoinTextureString(c.goldIn) or c.goldIn,
         GetCoinTextureString and GetCoinTextureString(c.goldOut) or c.goldOut))
     local m = c.miles
@@ -288,7 +322,9 @@ SLASH_HEARTHLOG1 = "/hl"
 SLASH_HEARTHLOG2 = "/hearthlog"
 SlashCmdList.HEARTHLOG = function(msg)
     local cmd, arg = strsplit(" ", strtrim((msg or ""):lower()), 2)
-    if cmd == "" or cmd == "status" then
+    if cmd == "" then
+        if ns.ToggleUI then ns.ToggleUI() else Status() end
+    elseif cmd == "status" then
         Status()
     elseif cmd == "pause" then
         ns.paused = not ns.paused
@@ -345,7 +381,7 @@ SlashCmdList.HEARTHLOG = function(msg)
         OpenSession(false)
         Print("this character's journey was erased")
     else
-        Print("/hl status · /hl events [n] · /hl top <items|used|spells|skills|buffs|emotes|chat|gold> · /hl who · /hl probe [on|off|list] · /hl pause · /hl export · /hl reset confirm")
+        Print("/hl opens the window · /hl status · /hl events [n] · /hl top <group> · /hl who · /hl probe · /hl pause · /hl export · /hl reset confirm")
     end
 end
 
@@ -369,7 +405,7 @@ ns.On("PLAYER_ENTERING_WORLD", function(isLogin, isReload)
         entered = true
         OpenSession(isReload)
         C_Timer.After(3, RequestPlayed)
-        Print(string.format("recording %s (session %d). /hl for status.", ns.key, ns.sessionIndex))
+        if ns.Setting("loginLine") then Print(string.format("recording %s (session %d). /hl opens the log.", ns.key, ns.sessionIndex)) end
     end
     if ns.OnEnterWorld then ns.OnEnterWorld(isLogin, isReload) end
 end)

@@ -11,9 +11,9 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   QUEST_ACC  q=questID, n=name
 --   QUEST_DONE q=questID, n=name, xp=, gold=copper, dur=seconds since accept (if seen)
 --   QUEST_DROP q=questID, n=name
---   DEATH      by=killer name, npc=id, spell=, amt=, party={..}, inst=instance name
+--   DEATH      by=killer name, npc=id, spell=, amt=, lvl=killer level, l=my level, party={..}, inst=instance name
 --   ALIVE      ghost=true when released to ghost, res=name of who resurrected (if offered), dur=seconds dead
---   KILL       n=mob name, npc=id, elite=true, rare=true, assist=true when a party member got the credit
+--   KILL       n=mob name, npc=id, lvl=mob level, elite=true, rare=true, assist=true when a party member got the credit
 --   FIGHT      dur=seconds, taken=damage taken, healed=healing done, party={..}
 --   ZONE       n=zone, sub=subzone
 --   INST_IN    n=instance name, kind=party|raid|pvp, party={..}
@@ -35,7 +35,44 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 
 local playerGUID
 local lastLevelT
-local lastHit = nil            -- Last damage taken: { src, npc, spell, amt, t }
+local lastHit = nil            -- Last damage taken: { src, npc, spell, amt, lvl, t }
+local engaged = {}             -- mob GUID -> last time we hit it, it hit us, or we healed someone it was fighting
+local engagedN = 0
+local memberFoes = {}          -- party member GUID -> { mob GUID = last time they traded blows }
+local PARTY_FLAGS = 0x7        -- COMBATLOG_OBJECT_AFFILIATION_MINE | PARTY | RAID
+local function IsGroupFlag(flags) return type(flags) == "number" and bit.band(flags, PARTY_FLAGS) ~= 0 end
+local levelOf = {}             -- GUID -> level, from whatever we target, mouse over or see on a nameplate
+local levelN = 0
+
+local function NoteLevel(unit)
+    local guid = unit and UnitGUID(unit)
+    if not guid then return end
+    local lvl = UnitLevel(unit)
+    if type(lvl) == "number" and lvl > 0 then
+        if not levelOf[guid] then
+            levelN = levelN + 1
+            if levelN > 400 then levelOf = {}; levelN = 1 end
+        end
+        levelOf[guid] = lvl
+    end
+end
+ns.On("PLAYER_TARGET_CHANGED", function() NoteLevel("target") end)
+ns.On("UPDATE_MOUSEOVER_UNIT", function() NoteLevel("mouseover") end)
+ns.On("NAME_PLATE_UNIT_ADDED", function(unit) NoteLevel(unit) end)
+local function LevelOf(guid)
+    if not guid then return nil end
+    if UnitGUID("target") == guid then NoteLevel("target") end
+    return levelOf[guid]
+end
+
+local function Engage(guid)
+    if not guid then return end
+    if not engaged[guid] then
+        engagedN = engagedN + 1
+        if engagedN > 400 then engaged = {}; engagedN = 1 end
+    end
+    engaged[guid] = Now()
+end
 local lastKillT, lastQuestT = 0, 0
 local questNames = {}          -- [questID] = { n, t }  accepted this session
 local turnedIn = {}            -- [questID] = true, to tell abandons from completions
@@ -83,11 +120,16 @@ end
 ns.On("PLAYER_LEVEL_UP", function(level)
     local now = Now()
     ns.level = level
-    Event("LEVEL", { v = level, since = lastLevelT and (now - lastLevelT) or nil, gear = GearSnapshot() })
+    local since = lastLevelT and (now - lastLevelT) or nil
+    Event("LEVEL", { v = level, since = since, gear = ns.Setting("gearSnapshot") and GearSnapshot() or nil })
     lastLevelT = now
     Count("levels")
     ns.lastLevelUpT = now -- Gz detection
     if ns.RequestPlayed then C_Timer.After(2, ns.RequestPlayed) end
+    if ns.Setting("levelSummary") then
+        local c = ns.char.counters
+        ns.Print(string.format("level %d%s · %d kills, %d deaths so far", level, since and (" after " .. ns.Duration(since)) or "", c.kills, c.deaths))
+    end
 end)
 
 local lastXP = nil
@@ -187,7 +229,19 @@ local function InParty(name)
 end
 
 local function OnCombatLog(...)
-    local _, sub, _, srcGUID, srcName, _, _, dstGUID, dstName, _, _, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 = ...
+    local _, sub, _, srcGUID, srcName, srcFlags, _, dstGUID, dstName, dstFlags, _, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 = ...
+    -- Who in the group is fighting which mob, so a heal on them counts as a hand in the kill
+    if DAMAGE[sub] and srcGUID ~= playerGUID and dstGUID ~= playerGUID then
+        if IsGroupFlag(srcFlags) and ns.NpcId(dstGUID) then
+            local foes = memberFoes[srcGUID]
+            if not foes then foes = {}; memberFoes[srcGUID] = foes end
+            foes[dstGUID] = Now()
+        elseif IsGroupFlag(dstFlags) and ns.NpcId(srcGUID) then
+            local foes = memberFoes[dstGUID]
+            if not foes then foes = {}; memberFoes[dstGUID] = foes end
+            foes[srcGUID] = Now()
+        end
+    end
     -- Damage suffix: amount, overkill, school, resisted, blocked, absorbed, critical. Spells and
     -- ranged carry a 3-field prefix (id, name, school) before it, swings none, environmental one.
     if dstGUID == playerGUID and DAMAGE[sub] then
@@ -196,26 +250,54 @@ local function OnCombatLog(...)
         elseif sub == "ENVIRONMENTAL_DAMAGE" then spell = a1; amt = a2; crit = a8; srcName = srcName or a1
         else spell = a2; amt = a4; crit = a10 end
         if type(amt) ~= "number" then amt = tonumber(amt) or 0 end
-        lastHit = { src = srcName, npc = ns.NpcId(srcGUID), spell = spell, amt = amt, t = Now() }
+        local npc = ns.NpcId(srcGUID)
+        lastHit = { src = srcName, npc = npc, spell = spell, amt = amt, lvl = LevelOf(srcGUID), t = Now() }
         if fight then fight.taken = fight.taken + amt end
         ns.Max("maxHitTaken", amt)
+        ns.Record("hitTaken", amt, { who = srcName, spell = spell, crit = crit == true or nil })
         if crit == true then Count("critsTaken") end
+        if npc then
+            Engage(srcGUID)
+            local rec = ns.Tally("hurtBy", npc, srcName)
+            if rec then rec.d = (rec.d or 0) + amt end
+        end
+    elseif DAMAGE[sub] and ns.NpcId(dstGUID) and UnitGUID("pet") and srcGUID == UnitGUID("pet") then
+        Engage(dstGUID)
     elseif srcGUID == playerGUID and DAMAGE[sub] then
-        local amt, crit
+        local amt, crit, spell
         if sub == "SWING_DAMAGE" then amt = a1; crit = a7; Count("swings")
-        elseif sub == "RANGE_DAMAGE" then amt = a4; crit = a10; Count("shots")
-        else amt = a4; crit = a10 end
+        elseif sub == "RANGE_DAMAGE" then amt = a4; crit = a10; spell = a2; Count("shots")
+        else amt = a4; crit = a10; spell = a2 end
         if type(amt) ~= "number" then amt = tonumber(amt) or 0 end
+        Count("damageDone", amt)
         ns.Max("maxHitDone", amt)
+        ns.Record("hitDone", amt, { who = dstName, spell = spell, crit = crit == true or nil })
         if crit == true then Count("critsDone") end
+        if ns.NpcId(dstGUID) then Engage(dstGUID) end
     elseif srcGUID == playerGUID and sub == "SWING_MISSED" then
         Count("swings")
         Count("swingMisses")
         if a1 == "DODGE" then Count("dodged") elseif a1 == "PARRY" then Count("parried") end
     elseif srcGUID == playerGUID and sub == "RANGE_MISSED" then
         Count("shots")
-    elseif srcGUID == playerGUID and HEAL[sub] and fight then
-        fight.healed = fight.healed + (tonumber(a4) or 0) - (tonumber(a5 or 0) or 0)
+    elseif HEAL[sub] and (srcGUID == playerGUID or dstGUID == playerGUID) then
+        local amt = (tonumber(a4) or 0) - (tonumber(a5 or 0) or 0) -- minus overheal
+        if srcGUID == playerGUID then
+            if fight then fight.healed = fight.healed + amt end
+            ns.Record("healDone", amt, { who = dstName, spell = a2 })
+            -- Healing a group member counts as a hand in whatever they were fighting in the last half minute
+            local foes = dstGUID ~= playerGUID and memberFoes[dstGUID]
+            if foes then
+                local now = Now()
+                for mob, t in pairs(foes) do
+                    if now - t <= 30 then Engage(mob) else foes[mob] = nil end
+                end
+            end
+        end
+        if dstGUID == playerGUID and srcGUID ~= playerGUID then
+            Count("healingTaken", amt)
+            ns.Record("healTaken", amt, { who = srcName, spell = a2 })
+        end
     elseif dstGUID == playerGUID and sub == "SPELL_AURA_APPLIED" then
         if IsPlayerGUID(srcGUID) and srcGUID ~= playerGUID and a4 == "BUFF" and not InParty(srcName) then
             Count("strangerBuffs")
@@ -225,7 +307,17 @@ local function OnCombatLog(...)
         local mine = srcGUID == playerGUID or (UnitGUID("pet") and srcGUID == UnitGUID("pet"))
         local npc = ns.NpcId(dstGUID)
         if not npc then return end -- Players and pets are not kills for this count
-        local e = { n = dstName, npc = npc }
+        -- A party member's kill counts as an assist when we had a hand in it: we hit it, it hit us,
+        -- or we healed someone it was fighting. Kills we had nothing to do with are only counted.
+        if not mine then
+            local touched = engaged[dstGUID] and (Now() - engaged[dstGUID]) <= 120
+            if not touched then
+                Count("partyKills")
+                return
+            end
+        end
+        if memberFoes[dstGUID] then memberFoes[dstGUID] = nil end
+        local e = { n = dstName, npc = npc, lvl = LevelOf(dstGUID) }
         if UnitGUID("target") == dstGUID then
             local cls = UnitClassification("target")
             if cls == "elite" or cls == "worldboss" or cls == "rareelite" then e.elite = true end
@@ -272,8 +364,10 @@ ns.On("PLAYER_DEAD", function()
     Count("deaths")
     if instance then instance.deaths = instance.deaths + 1 end
     local e = { party = #party > 0 and ns.CopyArray(party) or nil, inst = instance and instance.n or nil }
+    e.l = ns.level
     if lastHit and Now() - lastHit.t <= 15 then
-        e.by, e.npc, e.spell, e.amt = lastHit.src, lastHit.npc, lastHit.spell, lastHit.amt
+        e.by, e.npc, e.spell, e.amt, e.lvl = lastHit.src, lastHit.npc, lastHit.spell, lastHit.amt, lastHit.lvl
+        if lastHit.npc then ns.Tally("killers", lastHit.npc, lastHit.src) end
     end
     Event("DEATH", e)
     -- Wipe: everyone in the party dead a moment later
@@ -337,22 +431,7 @@ local function InstanceCheck()
     end
 end
 
-function ns.OnEnterWorld()
-    playerGUID = UnitGUID("player")
-    money = GetMoney()
-    lastXP = UnitXP("player")
-    guildName = GetGuildInfo("player")
-    party = ns.PartyList()
-    C_Timer.After(2, function()
-        ZoneCheck()
-        InstanceCheck()
-    end)
-end
-
--- ---------------------------------------------------------
--- Party
--- ---------------------------------------------------------
-ns.On("GROUP_ROSTER_UPDATE", function()
+local function RosterDiff()
     local new = ns.PartyList()
     local old = {}
     for _, m in ipairs(party) do old[m] = true end
@@ -368,6 +447,29 @@ ns.On("GROUP_ROSTER_UPDATE", function()
     party = new
     if #add == 0 and #rem == 0 then return end
     Event("PARTY", { add = #add > 0 and add or nil, rem = #rem > 0 and rem or nil, n = #new })
+end
+
+function ns.OnEnterWorld()
+    playerGUID = UnitGUID("player")
+    money = GetMoney()
+    lastXP = UnitXP("player")
+    guildName = GetGuildInfo("player")
+    party = {}
+    C_Timer.After(2, function()
+        ZoneCheck()
+        InstanceCheck()
+    end)
+    -- Party names arrive a moment after login; the first diff records who was already there
+    C_Timer.After(4, RosterDiff)
+end
+
+-- ---------------------------------------------------------
+-- Party
+-- ---------------------------------------------------------
+ns.On("GROUP_ROSTER_UPDATE", function()
+    RosterDiff()
+    -- Names can still be "Unknown" on the first update; look again shortly
+    C_Timer.After(3, RosterDiff)
 end)
 
 -- ---------------------------------------------------------
@@ -460,7 +562,9 @@ end)
 -- Hearthstone, taxi
 -- ---------------------------------------------------------
 local HEARTH_SPELLS = { [8690] = true, [556] = true } -- Hearthstone, Astral Recall
-local AUTO_SPELLS = { [6603] = true, [75] = true, [5019] = true } -- Attack, Auto Shot, Shoot: counted from the combat log instead
+-- Attack, Auto Shot, Shoot (counted from the combat log instead) and LOGINEFFECT, which the game casts on you at login
+ns.AUTO_SPELLS = { [6603] = true, [75] = true, [5019] = true, [836] = true }
+local AUTO_SPELLS = ns.AUTO_SPELLS
 local function SpellName(spellID)
     local name = Call("GetSpellInfo", spellID)
     if not name and C_Spell and C_Spell.GetSpellName then name = CallIn(C_Spell, "GetSpellName", spellID) end
@@ -474,10 +578,11 @@ ns.On("UNIT_SPELLCAST_SUCCEEDED", function(unit, _, spellID)
         Count("hearths")
         Event("HEARTH", { to = GetBindLocation and GetBindLocation() or nil })
     end
-    if not AUTO_SPELLS[spellID] then
-        Count("casts")
-        ns.Tally("spells", spellID, SpellName(spellID))
-    end
+    if AUTO_SPELLS[spellID] then return end
+    local name = SpellName(spellID)
+    if name == "Food" or name == "Drink" then return end -- eating is tracked on its own
+    Count("casts")
+    ns.Tally("spells", spellID, name)
 end)
 
 -- Items used: bags (C_Container / UseContainerItem), action bars (UseAction), by name
@@ -545,24 +650,34 @@ end)
 -- ---------------------------------------------------------
 -- Duels, guild, jumps, gz
 -- ---------------------------------------------------------
+-- DUEL_FINISHED fires for declined requests too, so a duel only counts once the
+-- "X has defeated Y in a duel" line arrives. A request with no such line is a request.
+local duelResultT = 0
 ns.On("DUEL_REQUESTED", function(name) lastDuel = { who = name, t = Now() } end)
 ns.On("DUEL_FINISHED", function()
-    Count("duels")
-    Event("DUEL", { who = lastDuel and lastDuel.who or nil })
+    local requested = lastDuel
     lastDuel = nil
+    C_Timer.After(3, function()
+        if Now() - duelResultT <= 6 then return end -- a real duel, already recorded
+        if requested then Count("duelRequests") end -- someone asked, we did not fight
+    end)
 end)
 ns.On("CHAT_MSG_SYSTEM", function(msg)
-    -- "X has defeated Y in a duel"
     if type(msg) ~= "string" then return end
     local winner, loser = msg:match("^(.-) has defeated (.-) in a duel")
+    if not winner then
+        winner, loser = msg:match("^(.-) has fled from (.-) in a duel")
+        if winner then winner, loser = loser, winner end
+    end
     if not winner then return end
     local me = UnitName("player")
-    local events = ns.char and ns.char.events
-    local lastE = events and events[#events]
-    if lastE and lastE.k == "DUEL" and Now() - lastE.t <= 5 then
-        lastE.won = (winner == me)
-        lastE.who = lastE.who or (winner == me and loser or winner)
-    end
+    if winner ~= me and loser ~= me then return end -- someone else's duel nearby
+    duelResultT = Now()
+    Count("duels")
+    Event("DUEL", { who = winner == me and loser or winner, won = (winner == me) })
+end)
+ns.On("PARTY_INVITE_REQUEST", function(name)
+    Count("partyInvites")
 end)
 
 ns.On("PLAYER_GUILD_UPDATE", function(unit)
@@ -575,7 +690,7 @@ end)
 
 if JumpOrAscendStart and hooksecurefunc then
     hooksecurefunc("JumpOrAscendStart", function()
-        if ns.char and not ns.paused then Count("jumps") end
+        if ns.char and not ns.paused and ns.Setting("countJumps") then Count("jumps") end
     end)
 end
 

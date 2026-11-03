@@ -7,7 +7,7 @@ from lupa import lua51 as L
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ADDON = os.path.join(HERE, "..", "Hearthlog")
-FILES = ["Util.lua", "Core.lua", "Track.lua", "Events.lua", "Probe.lua", "Export.lua", "Version.lua"]
+FILES = ["Util.lua", "Core.lua", "Track.lua", "Events.lua", "Probe.lua", "Export.lua", "Version.lua", "UI.lua"]
 
 rt = L.LuaRuntime(unpack_returned_tuples=True)
 import re
@@ -94,6 +94,29 @@ M.Advance(4)
 fire("ZONE_CHANGED_NEW_AREA")
 JumpOrAscendStart(); JumpOrAscendStart()
 
+-- A duel request we decline, then a duel we fight and win, then a party invite
+fire("DUEL_REQUESTED", "Novadasavage")
+fire("DUEL_FINISHED")
+M.Advance(5)
+fire("DUEL_REQUESTED", "Novadasavage")
+M.Advance(20)
+fire("CHAT_MSG_SYSTEM", "Zinther has defeated Novadasavage in a duel")
+fire("DUEL_FINISHED")
+M.Advance(5)
+fire("PARTY_INVITE_REQUEST", "Danwar")
+
+-- Assists: Danwar (party flag 0x2) fights a wolf, we heal him, he kills it -> assist.
+-- Then he kills a boar we never touched and never healed him during -> partyKills only.
+M.cleu = { 0, "SWING_DAMAGE", false, "Player-1-000002", "Danwar", 0x512, 0, "Creature-0-1-0-1-299-0010", "Young Wolf", 0xa48, 0, 9 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.cleu = { 0, "SPELL_HEAL", false, "Player-1-000001", "Zinther", 0x511, 0, "Player-1-000002", "Danwar", 0x512, 0, 635, "Holy Light", 2, 40, 0, false }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.cleu = { 0, "PARTY_KILL", false, "Player-1-000002", "Danwar", 0x512, 0, "Creature-0-1-0-1-299-0010", "Young Wolf", 0xa48, 0 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+M.Advance(2)
+M.cleu = { 0, "PARTY_KILL", false, "Player-1-000002", "Danwar", 0x512, 0, "Creature-0-1-0-1-7-0011", "Boar", 0xa48, 0 }
+fire("COMBAT_LOG_EVENT_UNFILTERED")
+
 -- Loot of everything, skills, discovery, spells, swings, food, item use, emotes, chat
 fire("CHAT_MSG_LOOT", "You receive loot: |cff9d9d9d|Hitem:755::::::::1:::::|h[Broken Tooth]|h|r.")
 fire("CHAT_MSG_LOOT", "You receive loot: |cffffffff|Hitem:2589::::::::1:::::|h[Linen Cloth]|h|rx3.")
@@ -137,6 +160,16 @@ SlashCmdList.HEARTHLOG("who")
 fire("CHAT_MSG_ADDON", "HLOG1", "A:0.1.0", "GUILD", "Tinga-TestRealm")
 M.Advance(3)
 
+-- The window, both skins, every tab
+SlashCmdList.HEARTHLOG("")
+SlashCmdList.HEARTHLOG("ui b")
+for _, tab in ipairs({ "overview", "journey", "combat", "loot", "settings" }) do ns.ShowTab(tab) end
+SlashCmdList.HEARTHLOG("ui a")
+for _, tab in ipairs({ "overview", "journey", "combat", "loot", "settings" }) do ns.ShowTab(tab) end
+assert(HearthlogFrame and HearthlogFrame:IsShown(), "window did not open")
+SlashCmdList.HEARTHLOG("")
+assert(not HearthlogFrame:IsShown(), "window did not close")
+
 -- Slash commands
 SlashCmdList.HEARTHLOG("status")
 SlashCmdList.HEARTHLOG("top items")
@@ -151,9 +184,10 @@ fire("PLAYER_LOGOUT")
 local char = HearthlogDB.chars["Zinther-TestRealm"]
 local kinds = {}
 for _, e in ipairs(char.events) do kinds[e.k] = (kinds[e.k] or 0) + 1 end
-return char, kinds, #ns.ExportString()
+return char, kinds, ns.ExportString()
 ''', ns)
-char, kinds, export_len = script
+char, kinds, export_str = script
+export_len = len(export_str)
 errors = [line for line in M.printed.values() if "handler error" in line]
 if errors:
     print("\nHANDLER ERRORS:")
@@ -171,6 +205,26 @@ print("counters: kills", c.kills, "deaths", c.deaths, "quests", c.questsDone, "l
 print("miles:", dict(c.miles.items()))
 print("maps:", {k: dict(v.items()) for k, v in rt.globals().HearthlogDB.maps.items()})
 print("export bytes:", export_len)
+# the export string must decode back to the same character in the Python loader
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from load import decode_export
+dec = decode_export(export_str)
+dchar = dec["chars"]["Zinther-TestRealm"]
+assert dchar["counters"]["kills"] == c.kills, "export round-trip: kills differ"
+assert len(dchar["events"]) == len(char.events), "export round-trip: event count differs"
+assert len(dchar["pos"][0]) == len(char.pos[1]), "export round-trip: pos chunks differ"
+assert dec["maps"][1412]["name"] == "Mulgore", "export round-trip: maps missing"
+assert c.duels == 1, "duels should be 1 (the declined request is not a duel)"
+assert c.duelRequests == 1, "one declined duel request expected"
+assert c.partyInvites == 1, "one party invite expected"
+assert kinds["DUEL"] == 1, "one DUEL event expected"
+print("duels OK: 1 fought, 1 declined, 1 party invite")
+assert c.assists == 1, "healing Danwar mid-fight should make his wolf kill an assist (got %s)" % c.assists
+assert c.partyKills == 1, "the untouched boar should be a party kill only (got %s)" % c.partyKills
+assert c.healingTaken == 0 and c.damageDone > 0, "damageDone/healingTaken counters"
+assert "Food" not in [r.nm for r in char.tallies.spells.values()], "Food must not be a cast"
+print("assists OK: 1 assist via heal, 1 party kill ignored")
+print("export round-trip: OK (%d events, %d maps)" % (len(dchar["events"]), len(dec["maps"])))
 t = char.tallies
 print("tallies:", {g: {k: dict(v.items()) for k, v in t[g].items()} for g in ["items", "used", "spells", "skills", "buffs", "emotes", "chat", "gold"]})
 leaked = [l for l in M.printed.values() if "LEAKED" in l]

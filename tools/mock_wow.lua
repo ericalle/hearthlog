@@ -10,19 +10,38 @@ M.printed = printed
 -- Frames and events
 local frames = {}
 local events = {}
+-- Any method not listed is a no-op; getters return something sensible
+local function Widget(kind)
+    local w = { kind = kind, scripts = {}, events = {}, all = false, shown = true, checked = false, text = "" }
+    function w:RegisterEvent(e) self.events[e] = true end
+    function w:UnregisterEvent(e) self.events[e] = nil end
+    function w:RegisterAllEvents() self.all = true end
+    function w:UnregisterAllEvents() self.all = false; self.events = {} end
+    function w:SetScript(k, fn) self.scripts[k] = fn end
+    function w:GetScript(k) return self.scripts[k] end
+    function w:HookScript(k, fn) self.scripts[k] = fn end
+    function w:Show() self.shown = true end
+    function w:Hide() self.shown = false end
+    function w:SetShown(v) self.shown = v and true or false end
+    function w:IsShown() return self.shown end
+    function w:SetText(t) self.text = t end
+    function w:GetText() return self.text end
+    function w:SetChecked(v) self.checked = v and true or false end
+    function w:GetChecked() return self.checked end
+    function w:GetWidth() return 300 end
+    function w:GetHeight() return 200 end
+    function w:GetStringHeight() return 120 end
+    function w:GetFontString() return Widget("FontString") end
+    function w:CreateFontString() return Widget("FontString") end
+    function w:CreateTexture() return Widget("Texture") end
+    function w:IsEnabled() return true end
+    function w:HasFocus() return false end
+    setmetatable(w, { __index = function(_, k) return function() end end })
+    return w
+end
 function _G.CreateFrame(kind, name, parent, template)
-    local f = { kind = kind, name = name, scripts = {}, events = {}, all = false }
-    function f:RegisterEvent(e) self.events[e] = true end
-    function f:UnregisterEvent(e) self.events[e] = nil end
-    function f:RegisterAllEvents() self.all = true end
-    function f:UnregisterAllEvents() self.all = false; self.events = {} end
-    function f:SetScript(k, fn) self.scripts[k] = fn end
-    function f:GetScript(k) return self.scripts[k] end
-    local noop = function() end
-    for _, m in ipairs({ "SetSize", "SetPoint", "SetFrameStrata", "SetMovable", "EnableMouse", "RegisterForDrag", "SetBackdrop",
-        "Hide", "Show", "SetMultiLine", "SetFontObject", "SetWidth", "SetAutoFocus", "SetScrollChild", "SetText", "SetFocus",
-        "HighlightText", "StartMoving", "StopMovingOrSizing", "GetFontString" }) do f[m] = noop end
-    function f:CreateFontString() return { SetPoint = noop, SetText = noop } end
+    local f = Widget(kind)
+    f.name = name
     tinsert(frames, f)
     if name then _G[name] = f end
     return f
@@ -141,9 +160,20 @@ _G.hooksecurefunc = function(a, b, c)
     tbl[name] = function(...) orig(...); fn(...) end
 end
 _G.UIParent = {}
+_G.UNKNOWNOBJECT = "Unknown"
+_G.SetPortraitTexture = function() end
+_G.BreakUpLargeNumbers = function(n) return tostring(n) end
 _G.UISpecialFrames = {}
 _G.SlashCmdList = {}
 _G.CombatLogGetCurrentEventInfo = function() return unpack(M.cleu) end
+_G.bit = _G.bit or { band = function(a, b)
+    local r, p = 0, 1
+    while a > 0 and b > 0 do
+        if a % 2 == 1 and b % 2 == 1 then r = r + p end
+        a, b, p = math.floor(a / 2), math.floor(b / 2), p * 2
+    end
+    return r
+end }
 _G.C_Map = {
     GetMapInfo = function(id) return { name = "Mulgore", parentMapID = 1414, mapType = 3 } end,
     GetBestMapForUnit = function() return M.hidden and nil or M.map end,

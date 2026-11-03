@@ -32,14 +32,15 @@ newer version, and `/hl who` shows who has it.
 
 | Command | What it does |
 | --- | --- |
-| `/hl` or `/hl status` | Where you are, what is recorded, counters |
+| `/hl` | Opens the Hearthlog window (Overview, Journey, Combat, Loot, Settings) |
+| `/hl status` | The same numbers printed to chat |
 | `/hl events [n]` | The last n events (default 10) |
 | `/hl top <group> [n]` | Top entries of a tally: `items`, `used`, `spells`, `skills`, `buffs`, `emotes`, `chat`, `gold` |
 | `/hl who` | Who in the guild and group has Hearthlog, and their versions |
 | `/hl version` | Your version and the releases page |
 | `/hl probe` | Probe status. `on`, `off`, `list` (top events seen) |
 | `/hl pause` | Stop recording until typed again or relog |
-| `/hl export` | The character's data as a paste-able string (small journeys only) |
+| `/hl export` | The character's data as one compressed string you can copy |
 | `/hl debug` | Print handler errors to chat |
 | `/hl reset confirm` | Erase this character's journey |
 
@@ -55,6 +56,16 @@ See the comment block at the top of `Hearthlog/Core.lua` for the table layout, `
 
 `install.sh [era|forever|retail|all]` copies the addon folder into a client on a Mac (`WOW_DIR` overrides the default
 `/Applications/World of Warcraft`).
+
+`tools/load.py` reads one or more `Hearthlog.lua` files into pandas (samples, events, sessions, plus counters and
+tallies), converting map positions to world coordinates with the bounds the addon records. `tools/plot_path.py`
+draws a character's path as a PNG, colored by movement mode with event markers. Both need `pip install lupa pandas
+matplotlib`. Put files under `data/` (gitignored).
+
+```sh
+python3 tools/load.py data/Hearthlog.lua
+python3 tools/plot_path.py data/Hearthlog.lua --zone "Elwynn Forest"
+```
 
 `tools/smoke_test.py` loads the addon into a mock of the WoW API (`tools/mock_wow.lua`) and runs a scripted session: walk, mount, quest, kill, level, die, party, dungeon, loot, hearth, taxi. It prints what was recorded and fails if a handler raises. Needs `pip install lupa`.
 

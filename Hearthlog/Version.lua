@@ -52,7 +52,7 @@ local function OnMessage(message, sender)
     end
     if (kind == "V" or kind == "A") and version ~= "" then
         peers[name] = version
-        if Newer(version, ns.VERSION) and not nudged then
+        if Newer(version, ns.VERSION) and not nudged and ns.Setting("versionNotice") then
             nudged = true
             Print(string.format("|cff33ff66Hearthlog %s is out|r (you have %s): %s", version, ns.VERSION, ns.URL))
         end
