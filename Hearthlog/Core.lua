@@ -378,6 +378,18 @@ SlashCmdList.HEARTHLOG = function(msg)
         if ns.WhoHasAddon then ns.WhoHasAddon() end
     elseif cmd == "version" then
         Print(string.format("v%s  ·  %s", ns.VERSION, ns.URL))
+    elseif cmd == "diag" then
+        local files = { "Util", "Compat", "Core", "Track", "Events", "Modern", "Meter", "Probe", "Export", "Version", "UI" }
+        local missing = {}
+        for _, f in ipairs(files) do if not (ns.LOADED and ns.LOADED[f]) then tinsert(missing, f) end end
+        local v, b, d, iv = GetBuildInfo()
+        Print(string.format("client %s build %s interface %s · project %s · NO_CLEU=%s HAS_METER=%s",
+            tostring(v), tostring(b), tostring(iv), tostring(WOW_PROJECT_ID), tostring(ns.NO_CLEU), tostring(ns.HAS_METER)))
+        Print("files loaded: " .. (#missing == 0 and "all" or ("MISSING " .. table.concat(missing, ", "))))
+        Print(string.format("helpers: Num=%s Str=%s Pat=%s KillFromXP=%s MeterDump=%s", type(ns.Num), type(ns.Str), type(ns.Pat), type(ns.KillFromXP), type(ns.MeterDump)))
+        Print(string.format("api: UnitGUID=%s UnitExists=%s UnitCanAttack=%s issecretvalue=%s C_DamageMeter=%s C_Item=%s C_UnitAuras=%s",
+            type(UnitGUID), type(UnitExists), type(UnitCanAttack), type(issecretvalue), type(C_DamageMeter), type(C_Item), type(C_UnitAuras)))
+        Print(string.format("scriptErrors cvar: %s (set to 1 and /reload to see load errors)", tostring(GetCVar and GetCVar("scriptErrors"))))
     elseif cmd == "meter" then
         if ns.MeterDump then ns.MeterDump() else Print("no damage meter on this client") end
     elseif cmd == "debug" then
@@ -414,6 +426,12 @@ ns.On("PLAYER_ENTERING_WORLD", function(isLogin, isReload)
         OpenSession(isReload)
         C_Timer.After(3, RequestPlayed)
         if ns.Setting("loginLine") then Print(string.format("recording %s (session %d). /hl opens the log.", ns.key, ns.sessionIndex)) end
+        -- A file that failed to load is worth a loud line, whatever the settings say
+        local missing = {}
+        for _, f in ipairs({ "Util", "Compat", "Core", "Track", "Events", "Modern", "Meter", "Probe", "Export", "Version", "UI" }) do
+            if not (ns.LOADED and ns.LOADED[f]) then tinsert(missing, f) end
+        end
+        if #missing > 0 then Print("|cffff5555some files did not load:|r " .. table.concat(missing, ", ") .. " · /hl diag for details") end
     end
     if ns.OnEnterWorld then ns.OnEnterWorld(isLogin, isReload) end
 end)
@@ -421,3 +439,5 @@ end)
 ns.On("PLAYER_LOGOUT", function()
     CloseSession()
 end)
+
+ns.LOADED.Core = true

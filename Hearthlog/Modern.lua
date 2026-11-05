@@ -12,6 +12,7 @@ local ADDON_NAME, ns = ...
 --   pvp kills    from the honorable kill chat line
 --   buffs        from the aura list, for group members only (strangers cannot be named)
 -- Killing blows vs assists, who healed whom, world damage and pet stats are not available here.
+ns.LOADED.Modern = true
 if not ns.NO_CLEU then return end
 
 local Count, Event, Now, Call, Short, Pat = ns.Count, ns.Event, ns.Now, ns.Call, ns.ShortName, ns.Pat
@@ -135,3 +136,5 @@ ns.On("UNIT_AURA", function(unit, info)
         end
     end
 end)
+
+ns.LOADED.Modern = true

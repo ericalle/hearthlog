@@ -1165,3 +1165,5 @@ end)
 ns.On("PLAYER_ENTERING_WORLD", function()
     C_Timer.After(2, InstanceCheck)
 end)
+
+ns.LOADED.Events = true

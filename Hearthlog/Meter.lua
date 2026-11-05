@@ -9,6 +9,7 @@ local ADDON_NAME, ns = ...
 -- healed you and whom you healed, interrupts, dispels, absorbs, and every group member's
 -- damage and healing per fight. Classic Era has no meter and no need for one.
 ns.HAS_METER = C_DamageMeter ~= nil and type(C_DamageMeter.GetCombatSessionFromType) == "function"
+ns.LOADED.Meter = true
 if not ns.HAS_METER then return end
 
 local Count, Now, CallIn, Short = ns.Count, ns.Now, ns.CallIn, ns.ShortName
@@ -236,3 +237,5 @@ ns.On("PLAYER_REGEN_ENABLED", function()
     ns.lastFightEvent = nil
     C_Timer.After(0.6, function() Poll(e) end)
 end)
+
+ns.LOADED.Meter = true

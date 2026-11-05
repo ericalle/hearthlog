@@ -1,5 +1,11 @@
 # Hearthlog changelog
 
+## 0.3.5
+- On Forever the helpers in Compat.lua came up missing at runtime (the file did not load, cause unknown), which
+  left kills and the meter read at zero with "attempt to call a nil value" errors. All shims now live in
+  Util.lua, the first file; Compat.lua only reports whether it loaded. Each file marks itself loaded, the
+  login line warns if any did not, and `/hl diag` prints client, files, helpers and API presence.
+
 ## 0.3.4
 - Forever: kills are taken from XP gains in or right after combat, named from your last hostile target. The
   experience chat line turned out to be hidden from addons on that client (it arrives as a KString).

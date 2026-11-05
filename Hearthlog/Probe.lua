@@ -99,3 +99,5 @@ function ns.OnLogin()
         Start()
     end
 end
+
+ns.LOADED.Probe = true

@@ -148,3 +148,5 @@ function ns.ShowExport()
     f.box:HighlightText()
     Print(string.format("export string: %d KB", math.floor(#text / 1024)))
 end
+
+ns.LOADED.Export = true

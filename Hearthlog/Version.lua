@@ -95,3 +95,5 @@ end)
 ns.On("CHAT_MSG_ADDON", function(prefix, message, _, sender)
     if prefix == PREFIX and type(message) == "string" then OnMessage(message, sender) end
 end)
+
+ns.LOADED.Version = true

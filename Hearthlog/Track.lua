@@ -202,3 +202,5 @@ function ns.OnSessionClose()
     if idle >= 10 then Push("P," .. idle) end
     Track.Flush()
 end
+
+ns.LOADED.Track = true
