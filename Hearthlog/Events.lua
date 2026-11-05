@@ -49,21 +49,16 @@ local function IsGroupFlag(flags) return type(flags) == "number" and bit.band(fl
 local levelOf = {}             -- GUID -> level, from whatever we target, mouse over or see on a nameplate
 local levelN = 0
 
-local function Short(name) return name and (name:match("^([^%-]+)") or name) or nil end
+local Short = ns.ShortName
 local function IsPlayerOrPet(guid) return type(guid) == "string" and (guid:sub(1, 6) == "Player" or guid:sub(1, 3) == "Pet") end
 local function IsPlayer(guid) return type(guid) == "string" and guid:sub(1, 6) == "Player" end
--- Turn one of the game's format strings ("%s won: %s") into a Lua pattern with captures
-local function Pat(fmt)
-    local s = fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
-    s = s:gsub("%%d", "(%%d+)"):gsub("%%s", "(.-)")
-    return "^" .. s .. "$"
-end
+local Pat = ns.Pat
 
 local function NoteLevel(unit)
-    local guid = unit and UnitGUID(unit)
+    local guid = unit and ns.Str(UnitGUID(unit))
     if not guid then return end
-    local lvl = UnitLevel(unit)
-    if type(lvl) == "number" and lvl > 0 then
+    local lvl = ns.Num(UnitLevel(unit))
+    if lvl and lvl > 0 then
         if not levelOf[guid] then
             levelN = levelN + 1
             if levelN > 400 then levelOf = {}; levelN = 1 end
@@ -78,6 +73,15 @@ local function LevelOf(guid)
     if not guid then return nil end
     if UnitGUID("target") == guid then NoteLevel("target") end
     return levelOf[guid]
+end
+
+local engagedNames = {} -- creature name -> last time we damaged it (meter clients only know names)
+function ns.Engaged(name)
+    if name then engagedNames[name] = Now() end
+end
+function ns.EngagedRecently(name)
+    local t = name and engagedNames[name]
+    return t ~= nil and (Now() - t) <= 120
 end
 
 local function Engage(guid)
@@ -183,18 +187,22 @@ ns.On("PLAYER_XP_UPDATE", function()
     lastXP = xp
     if gain <= 0 then return end -- Level rollover: the LEVEL event covers it
     Count("xp", gain)
-    local quest = Recent(lastQuestEvent, 2)
-    local kill = Recent(lastKillEvent, 3)
-    if quest then
-        Count("xpQuest", gain)
-        quest.xp = quest.xp or gain
-    elseif kill then
-        Count("xpKill", gain)
-        kill.xp = (kill.xp or 0) + gain
-    else
-        Count("xpOther", gain)
-        Event("XP", { v = gain, src = (Now() - lastDiscoverT <= 3) and "discover" or "other" })
+    local function classify()
+        local quest = Recent(lastQuestEvent, 2)
+        local kill = Recent(lastKillEvent, 3)
+        if quest then
+            Count("xpQuest", gain)
+            quest.xp = quest.xp or gain
+        elseif kill then
+            if not kill.xp then Count("xpKill", gain) end -- Modern.lua counts it when the kill line carries the xp
+            kill.xp = kill.xp or gain
+        else
+            Count("xpOther", gain)
+            Event("XP", { v = gain, src = (Now() - lastDiscoverT <= 3) and "discover" or "other" })
+        end
     end
+    -- Without the combat log, the kill is known from a chat line that may arrive just after this event
+    if ns.NO_CLEU then C_Timer.After(0.5, classify) else classify() end
 end)
 
 -- "Discovered: Northshire Abbey"
@@ -343,6 +351,15 @@ local function OnCombatLog(...)
         Count("damageDone", amt)
         ns.Max("maxHitDone", amt)
         ns.Record("hitDone", amt, { who = dstName, spell = spell, crit = crit == true or nil })
+        local sid = (sub == "SWING_DAMAGE") and "melee" or a1
+        if sid then
+            local rec = ns.Tally("damageBySpell", sid, spell or "Melee")
+            if rec then rec.d = (rec.d or 0) + amt end
+        end
+        if dstName and ns.NpcId(dstGUID) then
+            local rec = ns.Tally("damageTo", dstName, dstName)
+            if rec then rec.d = (rec.d or 0) + amt end
+        end
         if crit == true then Count("critsDone") end
         if ns.NpcId(dstGUID) then Engage(dstGUID) end
     elseif srcGUID == playerGUID and sub == "SWING_MISSED" then
@@ -377,6 +394,10 @@ local function OnCombatLog(...)
                 if rec then rec.d = (rec.d or 0) + amt end
             end
         end
+    elseif srcGUID == playerGUID and sub == "SPELL_INTERRUPT" then
+        Count("interrupts")
+    elseif srcGUID == playerGUID and sub == "SPELL_DISPEL" then
+        Count("dispels")
     elseif sub == "SPELL_RESURRECT" and dstGUID == playerGUID and srcName then
         Count("rezzes")
         ns.Tally("rezBy", Short(srcName), Short(srcName))
@@ -427,9 +448,23 @@ local function OnCombatLog(...)
     end
 end
 
-ns.On("COMBAT_LOG_EVENT_UNFILTERED", function()
-    if CombatLogGetCurrentEventInfo then OnCombatLog(CombatLogGetCurrentEventInfo()) end
-end)
+-- The combat log is not available to addons on modern clients (Forever, Retail 12.0+); Modern.lua
+-- feeds the two entry points below from the events that remain.
+if not ns.NO_CLEU then
+    ns.On("COMBAT_LOG_EVENT_UNFILTERED", function()
+        if CombatLogGetCurrentEventInfo then OnCombatLog(CombatLogGetCurrentEventInfo()) end
+    end)
+end
+function ns.NoteKill(e)
+    lastKillT = Now()
+    if instance then instance.kills = instance.kills + 1 end
+    lastKillEvent = Event("KILL", e)
+end
+function ns.NoteDamageTaken(amt, crit)
+    if fight then fight.taken = fight.taken + amt end
+    ns.Max("maxHitTaken", amt)
+    if crit then Count("critsTaken") end
+end
 
 -- ---------------------------------------------------------
 -- Fights
@@ -447,7 +482,7 @@ ns.On("PLAYER_REGEN_ENABLED", function()
     Count("healingDone", fight.healed)
     -- Short solo fights are noise for the replay; keep them in counters only
     if dur >= 20 or fight.healed > 0 or #party > 0 then
-        Event("FIGHT", { dur = dur, taken = fight.taken, healed = fight.healed, party = #party > 0 and ns.CopyArray(party) or nil })
+        ns.lastFightEvent = Event("FIGHT", { dur = dur, taken = fight.taken, healed = fight.healed, party = #party > 0 and ns.CopyArray(party) or nil })
     end
     fight = nil
 end)
@@ -461,6 +496,24 @@ ns.On("PLAYER_DEAD", function()
     if instance then instance.deaths = instance.deaths + 1 end
     local e = { party = #party > 0 and ns.CopyArray(party) or nil, inst = instance and instance.n or nil }
     e.l = ns.level
+    if ns.NO_CLEU and not lastHit and UnitExists and UnitExists("target") and UnitCanAttack("player", "target") then
+        -- No combat log here: whoever you had targeted is the best available guess
+        local name = ns.Str(UnitName("target"))
+        if name then
+            e.by, e.guess = name, true
+            e.lvl = ns.Num(UnitLevel("target"))
+            if e.lvl and e.lvl <= 0 then e.lvl = nil end
+            if UnitIsPlayer("target") then
+                e.pvp = true
+                Count("pvpDeaths")
+                ns.Tally("killedByPlayers", ns.ShortName(name), ns.ShortName(name))
+            else
+                local guid = ns.Str(UnitGUID("target"))
+                e.npc = guid and ns.NpcId(guid) or nil
+                if e.npc then ns.Tally("killers", e.npc, name) end
+            end
+        end
+    end
     if lastHit and Now() - lastHit.t <= 15 then
         e.by, e.npc, e.spell, e.amt, e.lvl = lastHit.src, lastHit.npc, lastHit.spell, lastHit.amt, lastHit.lvl
         if lastHit.npc then ns.Tally("killers", lastHit.npc, lastHit.src) end
@@ -706,7 +759,7 @@ local function UsedItem(link)
         return
     end
     if TradingWindowOpen() then return end
-    local equippable = Call("IsEquippableItem", link)
+    local equippable = ns.Equippable(link)
     if equippable then return end
     ns.Tally("used", ns.ItemId(link), ns.LinkName(link), { q = ns.LinkQuality(link) })
 end
@@ -724,7 +777,7 @@ if hooksecurefunc then
         hooksecurefunc("UseAction", function(slot)
             local kind, id = Call("GetActionInfo", slot)
             if kind == "item" and id then
-                local _, link = Call("GetItemInfo", id)
+                local _, link = ns.ItemInfo(id)
                 if link then UsedItem(link) else ns.Tally("used", id, nil) end
             end
         end)
@@ -739,7 +792,7 @@ if hooksecurefunc then
     end
     if UseItemByName then
         hooksecurefunc("UseItemByName", function(name)
-            local _, link = Call("GetItemInfo", name)
+            local _, link = ns.ItemInfo(name)
             UsedItem(link)
         end)
     end
@@ -1056,10 +1109,7 @@ ns.On("CHAT_MSG_SAY", OnChat("say"))
 -- ---------------------------------------------------------
 local eatingSince, drinkingSince = nil, nil
 local function HasBuff(wanted)
-    -- UnitAura by index works on every client; AuraUtil is a bonus
-    for i = 1, 40 do
-        local name = Call("UnitAura", "player", i, "HELPFUL")
-        if not name then break end
+    for _, name in ipairs(ns.PlayerBuffNames()) do
         if FOOD_AURAS[name] == wanted then return true end
     end
     return false

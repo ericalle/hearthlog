@@ -1,0 +1,19 @@
+## Interface: 16001
+## Title: Hearthlog
+## Notes: Records your character's journey (path, events, sessions) for replay and a year-end recap. Local only, nothing leaves your machine.
+## Author: Eric Allen
+## Version: 0.3.3
+## SavedVariables: HearthlogDB
+## X-Website: https://github.com/ericalle/hearthlog
+
+Util.lua
+Compat.lua
+Core.lua
+Track.lua
+Events.lua
+Modern.lua
+Meter.lua
+Probe.lua
+Export.lua
+Version.lua
+UI.lua

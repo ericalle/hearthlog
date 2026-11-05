@@ -7,14 +7,19 @@ from lupa import lua51 as L
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ADDON = os.path.join(HERE, "..", "Hearthlog")
-FILES = ["Util.lua", "Core.lua", "Track.lua", "Events.lua", "Probe.lua", "Export.lua", "Version.lua", "UI.lua"]
+FILES = ["Util.lua", "Compat.lua", "Core.lua", "Track.lua", "Events.lua", "Modern.lua", "Meter.lua", "Probe.lua", "Export.lua", "Version.lua", "UI.lua"]
+FOREVER = os.environ.get("HL_CLIENT") == "forever"
 
 rt = L.LuaRuntime(unpack_returned_tuples=True)
 import re
 mock_src = re.sub(r"\nreturn M\s*$", "\n_G.MOCK = M\n", open(os.path.join(HERE, "mock_wow.lua")).read())
 rt.execute(mock_src)
 M = rt.globals().MOCK
+if FOREVER:
+    M.ForeverMode()
+    print("=== Forever client mode: modern API, no combat log ===")
 ns = M.LoadAddon(ADDON, rt.table(*FILES))
+assert bool(ns.NO_CLEU) == FOREVER, "client detection"
 
 script = rt.execute(r'''
 local M, ns = MOCK, ...
@@ -175,6 +180,56 @@ M.cleu = { 0, "UNIT_DIED", false, nil, nil, 0, 0, "Pet-0-1-0-1-5-0009", "Growl",
 fire("COMBAT_LOG_EVENT_UNFILTERED")
 M.units.pet = nil
 
+-- Forever: the combat log never fired above, so feed the modern replacements
+if M.forever then
+    M.party = {} -- damage to the target only counts as yours while solo
+    M.units.target = { name = "Kobold Vermin", guid = "Creature-0-1-0-1-6-0003", hostile = true }
+    M.targetGUID = "Creature-0-1-0-1-6-0003"
+    fire("UNIT_COMBAT", "target", "WOUND", "CRITICAL", 31, 1)
+    fire("UNIT_COMBAT", "target", "DODGE", "", 0, 1)
+    fire("UNIT_COMBAT", "player", "WOUND", "", 12, 1)
+    fire("UNIT_COMBAT", "player", "HEAL", "", 40, 2)
+    M.xp = M.xp + 45
+    fire("PLAYER_XP_UPDATE")
+    fire("CHAT_MSG_COMBAT_XP_GAIN", "Kobold Vermin dies, you gain 45 experience.")
+    M.Advance(1)
+    fire("CHAT_MSG_COMBAT_XP_GAIN", "Young Wolf dies, you gain 30 experience. (+6 group bonus)")
+    M.Advance(1)
+    fire("CHAT_MSG_COMBAT_HONOR_GAIN", "Stabbyjoe dies, honorable kill Rank: Scout (Estimated Honor Points: 12)")
+    fire("RESURRECT_REQUEST", "Danwar")
+    fire("UNIT_AURA", "player", { addedAuras = { { name = "Power Word: Fortitude", isHelpful = true, sourceUnit = "party1" } } })
+    M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }
+    fire("UNIT_AURA", "player", { addedAuras = { { name = "Arcane Intellect", isHelpful = true, sourceUnit = "party1" } } })
+    M.units.target = { name = "Mangy Wolf", guid = "Creature-0-1-0-1-299-0020", hostile = true }
+    M.targetGUID = "Creature-0-1-0-1-299-0020"
+    M.dead = true
+    fire("PLAYER_DEAD")
+    M.dead = false
+    fire("PLAYER_UNGHOST")
+    fire("PLAYER_ALIVE")
+
+    -- A grouped fight read back from the game's damage meter once combat ends
+    M.party = { "party1" }
+    fire("PLAYER_REGEN_DISABLED")
+    M.Advance(25)
+    M.meter = { dur = 25,
+        [0] = { { guid = "Player-1-000001", name = "Zinther", total = 400, me = true,
+                  spells = { { id = 20154, total = 300, creature = "Kobold Vermin", overkill = 12 }, { id = 6603, total = 100, creature = "Young Wolf" } } },
+                { guid = "Player-1-000002", name = "Danwar", total = 600 } },
+        [2] = { { guid = "Player-1-000001", name = "Zinther", total = 80, me = true, spells = { { id = 635, total = 80, creature = "Danwar" } } },
+                { guid = "Player-1-000002", name = "Danwar", total = 120, spells = { { id = 2050, total = 120, creature = "Zinther" } } } },
+        [7] = { { guid = "Player-1-000001", name = "Zinther", total = 150, me = true, spells = { { id = 6603, total = 150, creature = "Kobold Vermin" } } } },
+        [5] = { { guid = "Player-1-000001", name = "Zinther", total = 2, me = true } },
+    }
+    fire("PLAYER_REGEN_ENABLED")
+    M.Advance(2)
+    fire("PLAYER_REGEN_ENABLED") -- a second read of the same fight must not double count
+    M.Advance(2)
+    fire("CHAT_MSG_COMBAT_XP_GAIN", "Kobold Vermin dies, you gain 20 experience. (+4 group bonus)")
+    fire("CHAT_MSG_COMBAT_XP_GAIN", "Boar dies, you gain 20 experience. (+4 group bonus)")
+    M.Advance(1)
+end
+
 -- Assists: Danwar (party flag 0x2) fights a wolf, we heal him, he kills it -> assist.
 -- Then he kills a boar we never touched and never healed him during -> partyKills only.
 M.cleu = { 0, "SWING_DAMAGE", false, "Player-1-000002", "Danwar", 0x512, 0, "Creature-0-1-0-1-299-0010", "Young Wolf", 0xa48, 0, 9 }
@@ -284,43 +339,73 @@ assert dchar["counters"]["kills"] == c.kills, "export round-trip: kills differ"
 assert len(dchar["events"]) == len(char.events), "export round-trip: event count differs"
 assert len(dchar["pos"][0]) == len(char.pos[1]), "export round-trip: pos chunks differ"
 assert dec["maps"][1412]["name"] == "Mulgore", "export round-trip: maps missing"
-assert c.duels == 1, "duels should be 1 (the declined request is not a duel)"
-assert c.duelRequests == 1, "one declined duel request expected"
-assert c.partyInvites == 1, "one party invite expected"
-assert kinds["DUEL"] == 1, "one DUEL event expected"
-print("duels OK: 1 fought, 1 declined, 1 party invite")
-assert c.assists == 1, "healing Danwar mid-fight should make his wolf kill an assist (got %s)" % c.assists
-assert c.partyKills == 1, "the untouched boar should be a party kill only (got %s)" % c.partyKills
-assert c.healingTaken == 50 and c.damageDone > 0, "damageDone/healingTaken counters (got %s)" % c.healingTaken
-assert "Food" not in [r.nm for r in char.tallies.spells.values()], "Food must not be a cast"
-print("assists OK: 1 assist via heal, 1 party kill ignored")
-t = char.tallies
-assert t.env["FALLING"].d == 37, "falling damage tally"
-assert c.rezzes == 1 and t.rezBy["Danwar"].n == 1, "rez by Danwar"
-assert t.healedBy["Danwar"].d == 50, "healedBy minus overheal (got %s)" % t.healedBy["Danwar"].d
-assert t.whispers["Danwar"].i == 2 and t.whispers["Danwar"].o == 1, "whispers in/out"
-assert c.binds == 1 and kinds["BIND"] == 1, "bind event"
-assert t.errors["Inventory is full."].n == 2, "error tally"
-assert c.screenshots == 1, "screenshot"
-assert t.bought[159].n == 5, "bought x5 (got %s)" % t.bought[159].n
-assert t.sold[755].n == 1 and 755 not in t.used, "sold, not used"
-assert c.pvpKills == 1 and t.pvpKills["Stabbyjoe"].n == 1 and kinds["PVP_KILL"] == 1, "pvp kill"
-assert c.pvpDeaths == 1 and t.killedByPlayers["Stabbyjoe"].n == 1, "pvp death"
-lvl = [e for e in char.events.values() if e.k == "LEVEL"][0]
-assert lvl.gold is not None and lvl.played is not None, "LEVEL carries gold and played"
-print("0.3.2 hooks OK: env, rez, heals by player, whispers, bind, errors, screenshot, bought/sold, pvp, level snapshot")
-assert t.buffedTo["Danwar"].n == 1, "buff given"
-assert c.rolls == 1 and c.rollsWon == 1 and kinds["WON"] == 1, "my roll and win"
-assert t.rolls["Zinther"].w == 1 and t.rolls["Zinther"].hi == 97, "my roll record"
-assert t.rolls["Danwar"].n == 2 and t.rolls["Danwar"].w == 1 and t.rolls["Danwar"].hi == 50, "Danwar rolls (got n=%s w=%s)" % (t.rolls["Danwar"].n, t.rolls["Danwar"].w)
-assert c.trades == 1 and t.trades["Danwar"].i == 2 and t.trades["Danwar"].o == 1 and t.trades["Danwar"].gi == 250, "trade"
-assert kinds["TRADE"] == 1, "trade event"
-assert c.mailItemsIn == 1 and t.mailFrom["Danwar"].n == 1, "mail item in"
-assert c.ahSold == 2 and c.ahSoldGold == 2400, "two lot sales counted, same mail not doubled (got %s/%s)" % (c.ahSold, c.ahSoldGold)
-assert c.mailSent == 1 and t.mailTo["Danwar"].i == 1 and t.mailTo["Danwar"].g == 500 and kinds["MAIL"] == 1, "mail sent"
-assert c.ahBuyouts == 1 and c.ahBids == 1 and c.ahSpent == 500 and t.ahBought[2318].n == 10, "auction buys (got n=%s)" % t.ahBought[2318].n
-assert c.ahPosted == 1 and t.ahPosted["Linen Cloth"].n == 40, "auction post"
-assert c.petDeaths == 1, "pet death"
+if not FOREVER:
+    assert c.duels == 1, "duels should be 1 (the declined request is not a duel)"
+    assert c.duelRequests == 1, "one declined duel request expected"
+    assert c.partyInvites == 1, "one party invite expected"
+    assert kinds["DUEL"] == 1, "one DUEL event expected"
+    print("duels OK: 1 fought, 1 declined, 1 party invite")
+    assert c.assists == 1, "healing Danwar mid-fight should make his wolf kill an assist (got %s)" % c.assists
+    assert c.partyKills == 1, "the untouched boar should be a party kill only (got %s)" % c.partyKills
+    assert c.healingTaken == 50 and c.damageDone > 0, "damageDone/healingTaken counters (got %s)" % c.healingTaken
+    assert "Food" not in [r.nm for r in char.tallies.spells.values()], "Food must not be a cast"
+    print("assists OK: 1 assist via heal, 1 party kill ignored")
+    t = char.tallies
+    assert t.env["FALLING"].d == 37, "falling damage tally"
+    assert c.rezzes == 1 and t.rezBy["Danwar"].n == 1, "rez by Danwar"
+    assert t.healedBy["Danwar"].d == 50, "healedBy minus overheal (got %s)" % t.healedBy["Danwar"].d
+    assert t.whispers["Danwar"].i == 2 and t.whispers["Danwar"].o == 1, "whispers in/out"
+    assert c.binds == 1 and kinds["BIND"] == 1, "bind event"
+    assert t.errors["Inventory is full."].n == 2, "error tally"
+    assert c.screenshots == 1, "screenshot"
+    assert t.bought[159].n == 5, "bought x5 (got %s)" % t.bought[159].n
+    assert t.sold[755].n == 1 and 755 not in t.used, "sold, not used"
+    assert c.pvpKills == 1 and t.pvpKills["Stabbyjoe"].n == 1 and kinds["PVP_KILL"] == 1, "pvp kill"
+    assert c.pvpDeaths == 1 and t.killedByPlayers["Stabbyjoe"].n == 1, "pvp death"
+    lvl = [e for e in char.events.values() if e.k == "LEVEL"][0]
+    assert lvl.gold is not None and lvl.played is not None, "LEVEL carries gold and played"
+    print("0.3.2 hooks OK: env, rez, heals by player, whispers, bind, errors, screenshot, bought/sold, pvp, level snapshot")
+    assert t.buffedTo["Danwar"].n == 1, "buff given"
+    assert c.rolls == 1 and c.rollsWon == 1 and kinds["WON"] == 1, "my roll and win"
+    assert t.rolls["Zinther"].w == 1 and t.rolls["Zinther"].hi == 97, "my roll record"
+    assert t.rolls["Danwar"].n == 2 and t.rolls["Danwar"].w == 1 and t.rolls["Danwar"].hi == 50, "Danwar rolls (got n=%s w=%s)" % (t.rolls["Danwar"].n, t.rolls["Danwar"].w)
+    assert c.trades == 1 and t.trades["Danwar"].i == 2 and t.trades["Danwar"].o == 1 and t.trades["Danwar"].gi == 250, "trade"
+    assert kinds["TRADE"] == 1, "trade event"
+    assert c.mailItemsIn == 1 and t.mailFrom["Danwar"].n == 1, "mail item in"
+    assert c.ahSold == 2 and c.ahSoldGold == 2400, "two lot sales counted, same mail not doubled (got %s/%s)" % (c.ahSold, c.ahSoldGold)
+    assert c.mailSent == 1 and t.mailTo["Danwar"].i == 1 and t.mailTo["Danwar"].g == 500 and kinds["MAIL"] == 1, "mail sent"
+    assert c.ahBuyouts == 1 and c.ahBids == 1 and c.ahSpent == 500 and t.ahBought[2318].n == 10, "auction buys (got n=%s)" % t.ahBought[2318].n
+    assert c.ahPosted == 1 and t.ahPosted["Linen Cloth"].n == 40, "auction post"
+    assert c.petDeaths == 1, "pet death"
+else:
+    t = char.tallies
+    assert c.kills == 1 and c.assists == 1 and c.partyKills == 2 and kinds["KILL"] == 2, \
+        "kills from xp lines (kills=%s assists=%s party=%s events=%s)" % (c.kills, c.assists, c.partyKills, kinds["KILL"])
+    assist = [e for e in char.events.values() if e.k == "KILL" and e.assist][0]
+    assert assist.n == "Kobold Vermin" and assist.group == True, "assist is the creature the meter saw us damage"
+    kv = [e for e in char.events.values() if e.k == "KILL" and e.n == "Kobold Vermin"][0]
+    assert kv.xp == 45 and kv.lvl is not None, "kill carries xp and target level"
+    assert c.xpKill == 115, "xp classified as kill xp (kill=%s other=%s)" % (c.xpKill, c.xpOther)
+    assert c.maxHitDone == 31 and c.critsDone == 1 and c.dodged == 1, "hits via UNIT_COMBAT"
+    assert c.maxHitTaken == 12 and c.healingTaken == 40, "taken via UNIT_COMBAT"
+    assert c.damageDone == 400 and c.damageTaken == 150 and c.healingDone == 80, "totals from the meter (done=%s taken=%s healed=%s)" % (c.damageDone, c.damageTaken, c.healingDone)
+    assert c.meterFights == 1 and c.interrupts == 2 and c.overkill == 12, "meter fight read once (fights=%s)" % c.meterFights
+    assert t.damageBySpell[20154].d == 300 and t.damageTo["Kobold Vermin"].d == 300, "damage by ability and target"
+    assert t.healBySpell[635].d == 80 and t.healedTo["Danwar"].d == 80 and t.healedBy["Danwar"].d == 120, "healing both ways from the meter"
+    assert t.hurtBy["Kobold Vermin"].d == 150, "hurt by from the meter"
+    assert t.groupDmg["Danwar"].d == 600 and t.groupHeal["Danwar"].d == 120, "group members' numbers"
+    fights = [e for e in char.events.values() if e.k == "FIGHT" and e.share is not None]
+    assert len(fights) == 1 and fights[0].share == 40 and fights[0].done == 400, "fight event carries share (got %s)" % [ (f.share, f.done) for f in fights]
+    assert char.records.hitDone.who == "Kobold Vermin", "biggest hit names the target"
+    assert c.pvpKills == 1 and t.pvpKills["Stabbyjoe"].n == 1, "honor line pvp kill"
+    assert c.rezzes == 2 and t.rezBy["Danwar"].n == 1 and t.rezBy["Meredith"].n == 1, "rez via RESURRECT_REQUEST"
+    assert t.buffedBy["Danwar"].n == 1 and t.buffedBy["Danwar"].f == 1, "buff from party via UNIT_AURA"
+    deaths = [e for e in char.events.values() if e.k == "DEATH"]
+    assert deaths[-1].by == "Mangy Wolf" and deaths[-1].guess == True, "death killer guessed from target"
+    assert t.killers[299].n == 1, "killers tally from guessed death"
+    assert c.duels == 1 and c.binds == 1 and c.trades == 1 and c.ahSold == 2 and c.mailSent == 1, "non-combat features unaffected"
+    assert "Food" not in [r.nm for r in char.tallies.spells.values()], "Food must not be a cast"
+    print("forever OK: kills from xp lines, UNIT_COMBAT damage, honor, rez, party buffs, guessed death")
 print("medium set OK: buffs given, rolls, trade, mail, auction house, pet")
 print("export round-trip: OK (%d events, %d maps)" % (len(dchar["events"]), len(dec["maps"])))
 t = char.tallies

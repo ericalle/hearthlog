@@ -1,5 +1,21 @@
 # Hearthlog changelog
 
+## 0.3.3
+- WoW Forever support. Forever runs on the modern client (Mainline family, interface 16001), not the Classic
+  one, so the addon now ships a `Hearthlog_Camelot.toc` (Forever's internal name) and the Mainline TOC lists
+  16001. Moved APIs (C_Item, C_UnitAuras, C_CurrencyInfo) are used when present.
+- Modern clients give addons no combat log, so on Forever and Retail the combat side is rebuilt from what
+  remains. Kills come from the experience chat line (a group kill is an assist when the meter saw you damage
+  that creature), hits and crits from UNIT_COMBAT, the killer on a death is guessed from your target, PvP
+  kills from the honor line, buffs from group members from the aura list.
+- The game's own damage meter (C_DamageMeter) is read after every fight on those clients: damage done and
+  healing done by ability and by target, who healed you, damage taken by attacker, interrupts, dispels,
+  absorbs, overkill, and each group member's damage and healing per fight. Grouped fights log your share of
+  the group's damage. Still unavailable there: swings and misses, killing blow vs assist, world damage, pet
+  stats, who buffed you outside your group. The Combat tab says so.
+- Both clients now tally damage by ability and by target, and count interrupts and dispels. The Friends tab
+  lists damage and healing by your group members.
+
 ## 0.3.2
 - Friends tab: whispers per person (counts only, never the text), who healed you and who you healed, who
   resurrected you, who buffed you, players you killed and players who killed you.

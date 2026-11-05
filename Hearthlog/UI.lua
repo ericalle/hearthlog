@@ -32,7 +32,7 @@ local frame, skin, current = nil, nil, "overview"
 local widgets = {}
 
 local function Coin(c)
-    if GetCoinTextureString then return GetCoinTextureString(c or 0) end
+    if ns.CoinString then return ns.CoinString(c or 0) end
     return tostring(c or 0) .. "c"
 end
 local function Yards(y) return string.format("%s yd", BreakUpLargeNumbers and BreakUpLargeNumbers(math.floor(y or 0)) or math.floor(y or 0)) end
@@ -42,6 +42,16 @@ local function Top(group, n)
     local list = {}
     for id, rec in pairs(t) do tinsert(list, { id = id, rec = rec }) end
     table.sort(list, function(a, b) return (a.rec.n or 0) > (b.rec.n or 0) end)
+    local out = {}
+    for i = 1, math.min(n, #list) do out[i] = list[i] end
+    return out
+end
+-- Sort a tally by a field other than n (d for damage or healing amounts)
+local function TopBy(group, field, n)
+    local t = ns.char and ns.char.tallies[group] or {}
+    local list = {}
+    for id, rec in pairs(t) do tinsert(list, { id = id, rec = rec }) end
+    table.sort(list, function(a, b) return (a.rec[field] or 0) > (b.rec[field] or 0) end)
     local out = {}
     for i = 1, math.min(n, #list) do out[i] = list[i] end
     return out
@@ -91,7 +101,9 @@ local function EventLine(e)
     elseif k == "DUEL" then return string.format("Duel with %s%s.", e.who or "?", e.won == true and ": won" or e.won == false and ": lost" or "")
     elseif k == "SKILL" then return string.format("%s reached %d.", e.n or "?", e.v or 0)
     elseif k == "XP" then return string.format("+%d xp (%s).", e.v or 0, e.src or "")
-    elseif k == "FIGHT" then return nil
+    elseif k == "FIGHT" then
+        if e.share then return string.format("Fight of %ds: %d damage, %d%% of the group's.", e.dur or 0, e.done or 0, e.share) end
+        return nil
     end
     return nil
 end
@@ -210,11 +222,25 @@ function CONTENT.combat()
     tinsert(rows, { "Fights", tostring(c.fights), ns.Duration(c.fightSeconds) .. " in combat" })
     tinsert(rows, { "Damage taken", tostring(c.damageTaken) })
     tinsert(rows, { "Biggest hit taken", tostring(c.maxHitTaken), RecordNote(r.hitTaken, "by") })
+    if c.interrupts + c.dispels > 0 then tinsert(rows, { "Interrupts / dispels", c.interrupts .. " / " .. c.dispels }) end
     tinsert(rows, { header = "HEALING" })
     tinsert(rows, { "Healing done", tostring(c.healingDone), RecordNote(r.healDone, "on", "biggest") })
     tinsert(rows, { "Healing received", tostring(c.healingTaken), RecordNote(r.healTaken, "from", "biggest") })
+    if c.absorbs > 0 then tinsert(rows, { "Absorbs", tostring(c.absorbs) }) end
 
-    local lines = { { title = "MOST KILLED" } }
+    local lines = {}
+    if ns.NO_CLEU then
+        tinsert(lines, { title = "ABOUT THIS CLIENT" })
+        tinsert(lines, { "", "No combat log for addons here. Kills come from experience messages," })
+        if ns.HAS_METER then
+            tinsert(lines, { "", "damage and healing from the game's meter after each fight, and the" })
+            tinsert(lines, { "", "killer on a death is your target. Swings and crits are not available." })
+        else
+            tinsert(lines, { "", "damage from your own frame, and the killer on a death is your target." })
+            tinsert(lines, { "", "Swings, assists, healing done and who hit whom are not available." })
+        end
+    end
+    tinsert(lines, { title = "MOST KILLED" })
     local kills = {}
     for _, e in ipairs(ns.char.events) do
         if e.k == "KILL" and e.n then kills[e.n] = (kills[e.n] or 0) + 1 end
@@ -252,6 +278,21 @@ function CONTENT.combat()
     end
     tinsert(lines, { title = "WEAPON SKILLS" })
     for _, s in ipairs(Top("skills", 6)) do tinsert(lines, { tostring(s.rec.v or s.rec.n), s.rec.nm or tostring(s.id) }) end
+    local bySpell = TopBy("damageBySpell", "d", 6)
+    if #bySpell > 0 then
+        tinsert(lines, { title = "DAMAGE BY ABILITY" })
+        for _, s in ipairs(bySpell) do tinsert(lines, { tostring(s.rec.d or 0), s.rec.nm or tostring(s.id) }) end
+    end
+    local to = TopBy("damageTo", "d", 6)
+    if #to > 0 then
+        tinsert(lines, { title = "MOST DAMAGED" })
+        for _, s in ipairs(to) do tinsert(lines, { tostring(s.rec.d or 0), s.rec.nm or tostring(s.id) }) end
+    end
+    local healSp = TopBy("healBySpell", "d", 4)
+    if #healSp > 0 then
+        tinsert(lines, { title = "HEALING BY ABILITY" })
+        for _, s in ipairs(healSp) do tinsert(lines, { tostring(s.rec.d or 0), s.rec.nm or tostring(s.id) }) end
+    end
     local env = Top("env", 6)
     if #env > 0 then
         tinsert(lines, { title = "THE WORLD ITSELF" })
@@ -323,17 +364,6 @@ function CONTENT.loot()
     return rows, lines
 end
 
--- Sort a tally by a field other than n (d for damage or healing amounts)
-local function TopBy(group, field, n)
-    local t = ns.char and ns.char.tallies[group] or {}
-    local list = {}
-    for id, rec in pairs(t) do tinsert(list, { id = id, rec = rec }) end
-    table.sort(list, function(a, b) return (a.rec[field] or 0) > (b.rec[field] or 0) end)
-    local out = {}
-    for i = 1, math.min(n, #list) do out[i] = list[i] end
-    return out
-end
-
 function CONTENT.friends()
     local c, t = ns.char.counters, ns.char.tallies
     local sent, got = 0, 0
@@ -381,6 +411,10 @@ function CONTENT.friends()
         return { tostring(s.rec.n), string.format("%s, got %d items · gave %d", s.rec.nm or s.id, s.rec.i or 0, s.rec.o or 0) } end)
     Section("MAIL", Top("mailTo", 5), function(s)
         return { tostring(s.rec.n), string.format("sent to %s, %d items", s.rec.nm or s.id, s.rec.i or 0) } end)
+    Section("DAMAGE IN YOUR GROUPS", TopBy("groupDmg", "d", 6), function(s)
+        return { tostring(s.rec.d or 0), string.format("%s, %d fights", s.rec.nm or s.id, s.rec.n or 0) } end)
+    Section("HEALING IN YOUR GROUPS", TopBy("groupHeal", "d", 6), function(s)
+        return { tostring(s.rec.d or 0), string.format("%s, %d fights", s.rec.nm or s.id, s.rec.n or 0) } end)
     Section("LUCKIEST ROLLERS", TopBy("rolls", "w", 6), function(s)
         return { tostring(s.rec.w or 0), string.format("%s, won %d of %d rolls, best %d", s.rec.nm or s.id, s.rec.w or 0, (s.rec.n or 0) + (s.rec.w or 0), s.rec.hi or 0) } end)
     Section("PLAYERS YOU KILLED", Top("pvpKills", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id) } end)

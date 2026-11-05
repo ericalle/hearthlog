@@ -13,7 +13,12 @@ local events = {}
 -- Any method not listed is a no-op; getters return something sensible
 local function Widget(kind)
     local w = { kind = kind, scripts = {}, events = {}, all = false, shown = true, checked = false, text = "" }
-    function w:RegisterEvent(e) self.events[e] = true end
+    function w:RegisterEvent(e)
+        if M.forever and (e == "COMBAT_LOG_EVENT_UNFILTERED" or e == "COMBAT_LOG_EVENT") then
+            error("Hearthlog has been blocked from an action only available to the Blizzard UI")
+        end
+        self.events[e] = true
+    end
     function w:UnregisterEvent(e) self.events[e] = nil end
     function w:RegisterAllEvents() self.all = true end
     function w:UnregisterAllEvents() self.all = false; self.events = {} end
@@ -119,6 +124,55 @@ _G.UnitGUID = function(u)
     return M.units[u] and M.units[u].guid
 end
 _G.GetBuildInfo = function() return "1.15.9", "60000", "2026-10-01", 11509 end
+M.forever = false -- set by M.ForeverMode() before the addon loads
+function M.ForeverMode()
+    -- The Forever client: interface 16001, the modern API, no combat log for addons
+    M.forever = true
+    _G.GetBuildInfo = function() return "1.60.1", "70205", "2026-11-04", 16001 end
+    _G.WOW_PROJECT_ID = 18
+    _G.issecretvalue = function(v) return false end
+    _G.C_Secrets = {}
+    _G.UnitAura, _G.GetItemInfo, _G.IsEquippableItem, _G.GetTalentTabTnfo, _G.GetCoinTextureString = nil, nil, nil, nil, nil
+    _G.GetSpellInfo = nil
+    _G.C_Item = { GetItemInfo = function(id) return "Refreshing Spring Water", "|cffffffff|Hitem:159::::::::1:::::|h[Refreshing Spring Water]|h|r" end,
+                  IsEquippableItem = function(link) return link and link:find("Cloak") ~= nil end }
+    _G.C_UnitAuras = { GetAuraDataByIndex = function(unit, i, filter) local n = M.buffs[i]; if n then return { name = n, isHelpful = true } end end }
+    _G.C_CurrencyInfo = { GetCoinTextureString = function(c) return tostring(c) .. "c" end }
+    _G.UnitExists = function(u) return M.units[u] ~= nil end
+    _G.UnitCanAttack = function(a, b) return M.units[b] and M.units[b].hostile or false end
+    _G.UnitIsPlayer = function(u) return M.units[u] and M.units[u].guid and M.units[u].guid:sub(1, 6) == "Player" or false end
+    -- The built-in damage meter. M.meter[kind] = { { guid, name, total, me, spells = { { id, total, creature, overkill } } } }
+    _G.Enum = _G.Enum or {}
+    Enum.DamageMeterSessionType = { Overall = 0, Current = 1, Expired = 2 }
+    Enum.DamageMeterType = { DamageDone = 0, Dps = 1, HealingDone = 2, Hps = 3, Absorbs = 4, Interrupts = 5, Dispels = 6,
+        DamageTaken = 7, AvoidableDamageTaken = 8, Deaths = 9, EnemyDamageTaken = 10 }
+    M.meter = nil
+    _G.C_DamageMeter = {
+        IsDamageMeterAvailable = function() return true end,
+        GetCombatSessionFromType = function(st, kind)
+            local m = M.meter
+            if not m then return { combatSources = {}, durationSeconds = 0, totalAmount = 0 } end
+            local srcs = {}
+            for _, s in ipairs(m[kind] or {}) do
+                tinsert(srcs, { sourceGUID = s.guid, name = s.name, totalAmount = s.total, isLocalPlayer = s.me or false })
+            end
+            return { combatSources = srcs, durationSeconds = m.dur, totalAmount = 0 }
+        end,
+        GetCombatSessionSourceFromType = function(st, kind, guid)
+            local m = M.meter
+            if not m then return nil end
+            for _, s in ipairs(m[kind] or {}) do
+                if s.guid == guid then
+                    local spells = {}
+                    for _, sp in ipairs(s.spells or {}) do
+                        tinsert(spells, { spellID = sp.id, totalAmount = sp.total, creatureName = sp.creature, overkillAmount = sp.overkill or 0 })
+                    end
+                    return { combatSpells = spells, totalAmount = s.total }
+                end
+            end
+        end,
+    }
+end
 _G.GetMoney = function() return M.money end
 _G.GetGuildInfo = function() return M.guild end
 _G.IsInRaid = function() return false end
