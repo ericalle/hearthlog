@@ -1,5 +1,9 @@
 # Hearthlog changelog
 
+## 0.3.10
+- Boats, zeppelins and the tram are detected with IsPlayerMoving (carried while not moving yourself) instead of
+  the speed value, which works on every client and no longer needs the secret speed on Forever.
+
 ## 0.3.9
 - Forever keeps the player's movement speed secret; the sampler compared it every tick and errored every tick.
   Speed is now optional (the boat test falls back to distance). Aura update payloads and meter tables are
