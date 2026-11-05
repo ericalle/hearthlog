@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.5"
+ns.VERSION = "0.3.6"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -154,10 +154,20 @@ end
 -- the modern API and the modern addon rules: no COMBAT_LOG_EVENT_UNFILTERED for addons at all,
 -- "secret" values in restricted content, and several globals moved into C_ namespaces.
 -- Classic Era (11509) keeps the old API. Modern.lua carries the no-combat-log fallbacks.
-local iv = tonumber(select(4, GetBuildInfo())) or 0
+-- Read defensively: on Forever this line, written as tonumber(select(4, GetBuildInfo())), threw during
+-- addon load and took the rest of the file with it.
+local iv = 0
+pcall(function()
+    local _, _, _, interface = GetBuildInfo()
+    iv = tonumber(interface) or 0
+end)
 ns.INTERFACE = iv
-ns.NO_CLEU = (iv >= 120000) or (iv >= 16000 and iv < 20000) or (WOW_PROJECT_ID == 18) or (C_Secrets ~= nil)
-    or type(issecretvalue) == "function"
+local noCleu = false
+pcall(function()
+    noCleu = (iv >= 120000) or (iv >= 16000 and iv < 20000) or (WOW_PROJECT_ID == 18) or (C_Secrets ~= nil)
+        or type(issecretvalue) == "function"
+end)
+ns.NO_CLEU = noCleu
 
 function ns.ItemInfo(item)
     if C_Item and C_Item.GetItemInfo then return ns.CallIn(C_Item, "GetItemInfo", item) end

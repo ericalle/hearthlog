@@ -1,5 +1,10 @@
 # Hearthlog changelog
 
+## 0.3.6
+- Util.lua was aborting during load on Forever at the client-detection line (the interface number read through
+  `select` while addons load), which left the combat fallbacks off and the login line warning that Util was
+  missing. The read is now guarded and cannot stop the file.
+
 ## 0.3.5
 - On Forever the helpers in Compat.lua came up missing at runtime (the file did not load, cause unknown), which
   left kills and the meter read at zero with "attempt to call a nil value" errors. All shims now live in
