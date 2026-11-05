@@ -75,6 +75,7 @@ local function EventLine(e)
     elseif k == "DEATH" then return string.format("%s %s.", e.pvp and "Killed by" or "Died to", Killer(e.by)), "red"
     elseif k == "PVP_KILL" then return string.format("Killed %s (player).", e.who or "?")
     elseif k == "BIND" then return string.format("Home is now %s.", e.n or "?")
+    elseif k == "LOOK" then return string.format("New appearance: %s.", e.n or "an item")
     elseif k == "WON" then return string.format("Won the roll for %s%s.", e.n or "?", e.roll and (" with a " .. e.roll) or "")
     elseif k == "TRADE" then return string.format("Traded with %s%s%s.", e.who or "?",
         e.got and (": got " .. table.concat(e.got, ", ")) or "", e.gave and ((e.got and ", gave " or ": gave ") .. table.concat(e.gave, ", ")) or "")
@@ -333,6 +334,7 @@ function CONTENT.loot()
         local v = (g.i or 0) - (g.o or 0)
         tinsert(rows, { ctx:sub(1, 1):upper() .. ctx:sub(2), (v >= 0 and "+" or "-") .. Coin(math.abs(v)), "", v >= 0 and "green" or "red" })
     end
+    if c.appearances > 0 then tinsert(rows, { "Appearances learned", tostring(c.appearances) }) end
     tinsert(rows, { header = "AUCTION HOUSE" })
     tinsert(rows, { "Bought", tostring(c.ahBids + c.ahBuyouts), Coin(c.ahSpent) .. " spent" })
     tinsert(rows, { "Posted", tostring(c.ahPosted) })

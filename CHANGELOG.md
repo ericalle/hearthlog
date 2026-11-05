@@ -1,5 +1,14 @@
 # Hearthlog changelog
 
+## 0.3.4
+- Forever: kills are taken from XP gains in or right after combat, named from your last hostile target. The
+  experience chat line turned out to be hidden from addons on that client (it arrives as a KString).
+- Forever: the damage meter read now finds you by name and GUID as well as the isLocalPlayer flag, and a
+  lone source while solo is taken as you. `/hl meter` prints what the game's meter holds right now, and
+  `/hl debug` shows meter read errors.
+- Appearance collection: each new appearance is counted and logged ("New appearance: Frayed Robe."), with
+  the count on the Loot tab.
+
 ## 0.3.3
 - WoW Forever support. Forever runs on the modern client (Mainline family, interface 16001), not the Classic
   one, so the addon now ships a `Hearthlog_Camelot.toc` (Forever's internal name) and the Mainline TOC lists

@@ -5,7 +5,7 @@ local ADDON_NAME, ns = ...
 -- =========================================================
 -- These clients give addons no COMBAT_LOG_EVENT_UNFILTERED, so the combat side is rebuilt
 -- from what is still allowed, with less detail:
---   kills        from the "X dies, you gain N experience." chat line (gray mobs give no line)
+--   kills        from XP gains in or right after combat, named from your last hostile target (gray mobs give no XP)
 --   damage taken, healing received, crits taken  from UNIT_COMBAT on the player
 --   damage done  from UNIT_COMBAT on your target, only while solo (the event does not say who hit it)
 --   deaths       the killer is your current target at the moment you die, marked as a guess
@@ -16,46 +16,52 @@ if not ns.NO_CLEU then return end
 
 local Count, Event, Now, Call, Short, Pat = ns.Count, ns.Event, ns.Now, ns.Call, ns.ShortName, ns.Pat
 
-local KILL_PATS = {
-    { Pat(COMBATLOG_XPGAIN_FIRSTPERSON_GROUP or "%s dies, you gain %d experience. (+%d group bonus)"), true },
-    { Pat(COMBATLOG_XPGAIN_FIRSTPERSON_RAID or "%s dies, you gain %d experience. (-%d raid penalty)"), true },
-    { Pat(COMBATLOG_XPGAIN_FIRSTPERSON or "%s dies, you gain %d experience."), false },
-}
-
-local function TargetIs(name)
-    return UnitExists and UnitExists("target") and ns.Str(UnitName("target")) == name
+-- Kills. The experience chat line is hidden from addons here (it arrives as a KString), so a kill
+-- is an XP gain during combat or just after it, and the mob is the hostile thing you last had targeted.
+local lastHostile = nil -- { n, lvl, npc, elite, rare, t }
+local function NoteHostileTarget()
+    if not (UnitExists and UnitExists("target")) then return end
+    if not UnitCanAttack("player", "target") or UnitIsPlayer("target") then return end
+    local name = ns.Str(UnitName("target"))
+    if not name then return end
+    local h = { n = name, t = Now() }
+    local lvl = ns.Num(UnitLevel("target"))
+    if lvl and lvl > 0 then h.lvl = lvl end
+    local guid = ns.Str(UnitGUID("target"))
+    if guid then h.npc = ns.NpcId(guid) end
+    local cls = ns.Str(UnitClassification("target"))
+    if cls == "elite" or cls == "worldboss" or cls == "rareelite" then h.elite = true end
+    if cls == "rare" or cls == "rareelite" then h.rare = true end
+    lastHostile = h
 end
+ns.On("PLAYER_TARGET_CHANGED", NoteHostileTarget)
+ns.On("UNIT_TARGET", function(unit) if unit == "player" then NoteHostileTarget() end end)
 
-ns.On("CHAT_MSG_COMBAT_XP_GAIN", function(msg)
-    msg = ns.Str(msg)
-    if not msg then return end
-    for _, p in ipairs(KILL_PATS) do
-        local name, xp = msg:match(p[1])
-        if name then
-            local e = { n = name, xp = tonumber(xp), group = p[2] or nil }
-            if TargetIs(name) then
-                e.lvl = ns.Num(UnitLevel("target"))
-                if e.lvl and e.lvl <= 0 then e.lvl = nil end
-                local guid = ns.Str(UnitGUID("target"))
-                if guid then e.npc = ns.NpcId(guid) end
-                local cls = ns.Str(UnitClassification("target"))
-                if cls == "elite" or cls == "worldboss" or cls == "rareelite" then e.elite = true end
-                if cls == "rare" or cls == "rareelite" then e.rare = true end
-            end
-            Count("xpKill", e.xp or 0)
-            if e.group and ns.HAS_METER then
-                -- A group kill: an assist if the meter saw us damage that creature recently, else only counted
-                if not ns.EngagedRecently(name) then Count("partyKills") return end
-                e.assist = true
-                Count("assists")
-            else
-                Count("kills")
-            end
-            ns.NoteKill(e)
-            return
-        end
+-- Called by the XP handler when a gain is not a quest or a discovery. Returns true if it was taken as a kill.
+function ns.KillFromXP(gain)
+    local inCombat = ns.InCombat() or ns.SinceCombat() <= 4
+    if not inCombat then return false end
+    local h = lastHostile
+    local e = { xp = gain }
+    if h and Now() - h.t <= 60 then
+        e.n, e.lvl, e.npc, e.elite, e.rare = h.n, h.lvl, h.npc, h.elite, h.rare
     end
-end)
+    if IsInGroup() then
+        e.group = true
+        -- Grouped: an assist when the meter saw you damage this mob, or you are in the fight yourself
+        if (e.n and ns.EngagedRecently(e.n)) or ns.InCombat() then
+            e.assist = true
+            Count("assists")
+        else
+            Count("partyKills")
+            return true
+        end
+    else
+        Count("kills")
+    end
+    ns.NoteKill(e)
+    return true
+end
 
 -- UNIT_COMBAT: unit, action (WOUND, HEAL, DODGE, PARRY, BLOCK, MISS, ...), descriptor (CRITICAL, ...), amount
 ns.On("UNIT_COMBAT", function(unit, action, descriptor, amount)

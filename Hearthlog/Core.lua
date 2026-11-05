@@ -36,7 +36,7 @@ local DEFAULT_COUNTERS = {
     duelRequests = 0, partyInvites = 0, pvpKills = 0, pvpDeaths = 0, honorKills = 0, rezzes = 0, binds = 0,
     screenshots = 0, petDeaths = 0, petDamage = 0, rolls = 0, rollsWon = 0, trades = 0, mailSent = 0, mailItemsIn = 0,
     ahBids = 0, ahBuyouts = 0, ahSpent = 0, ahPosted = 0, ahSold = 0, ahSoldGold = 0,
-    interrupts = 0, dispels = 0, absorbs = 0, overkill = 0, meterFights = 0,
+    interrupts = 0, dispels = 0, absorbs = 0, overkill = 0, meterFights = 0, appearances = 0,
     meals = 0, drinks = 0, foodSeconds = 0, drinkSeconds = 0, strangerBuffs = 0,
     lootItems = 0, lootGray = 0, lootWhite = 0, emotes = 0, messages = 0,
     miles = { f = 0, m = 0, t = 0, s = 0, g = 0, v = 0, b = 0 },
@@ -378,6 +378,8 @@ SlashCmdList.HEARTHLOG = function(msg)
         if ns.WhoHasAddon then ns.WhoHasAddon() end
     elseif cmd == "version" then
         Print(string.format("v%s  ·  %s", ns.VERSION, ns.URL))
+    elseif cmd == "meter" then
+        if ns.MeterDump then ns.MeterDump() else Print("no damage meter on this client") end
     elseif cmd == "debug" then
         ns.debug = not ns.debug
         Print("debug " .. (ns.debug and "on" or "off"))

@@ -17,6 +17,7 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   WON        n=item name, q=quality, roll=your roll (a loot roll you won)
 --   TRADE      who=, gave={item names}, got={item names}, gi=copper received, go=copper given
 --   MAIL       to=, items=count, gold=copper (mail you sent)
+--   LOOK       n=item name, id=appearance source id (added to the appearance collection)
 --   ALIVE      ghost=true when released to ghost, res=name of who resurrected (if offered), dur=seconds dead
 --   KILL       n=mob name, npc=id, lvl=mob level, elite=true, rare=true, assist=true when a party member got the credit
 --   FIGHT      dur=seconds, taken=damage taken, healed=healing done, party={..}
@@ -173,6 +174,7 @@ end)
 local lastXP = nil
 local lastDiscoverT = 0
 local lastKillEvent, lastQuestEvent = nil, nil
+local fightEndedT = nil
 
 -- Last event of a kind within `window` seconds, or nil
 local function Recent(e, window)
@@ -196,12 +198,18 @@ ns.On("PLAYER_XP_UPDATE", function()
         elseif kill then
             if not kill.xp then Count("xpKill", gain) end -- Modern.lua counts it when the kill line carries the xp
             kill.xp = kill.xp or gain
+        elseif Now() - lastDiscoverT <= 3 then
+            Count("xpOther", gain)
+            Event("XP", { v = gain, src = "discover" })
+        elseif ns.KillFromXP and ns.KillFromXP(gain) then
+            -- No combat log: a gain in or right after combat is a kill (Modern.lua names the mob from your target)
+            Count("xpKill", gain)
         else
             Count("xpOther", gain)
-            Event("XP", { v = gain, src = (Now() - lastDiscoverT <= 3) and "discover" or "other" })
+            Event("XP", { v = gain, src = "other" })
         end
     end
-    -- Without the combat log, the kill is known from a chat line that may arrive just after this event
+    -- Without the combat log, a quest turn-in or discovery line may land just after this event
     if ns.NO_CLEU then C_Timer.After(0.5, classify) else classify() end
 end)
 
@@ -459,7 +467,10 @@ function ns.NoteKill(e)
     lastKillT = Now()
     if instance then instance.kills = instance.kills + 1 end
     lastKillEvent = Event("KILL", e)
+    return lastKillEvent
 end
+function ns.InCombat() return fight ~= nil end
+function ns.SinceCombat() return fightEndedT and (Now() - fightEndedT) or 1e9 end
 function ns.NoteDamageTaken(amt, crit)
     if fight then fight.taken = fight.taken + amt end
     ns.Max("maxHitTaken", amt)
@@ -474,6 +485,7 @@ ns.On("PLAYER_REGEN_DISABLED", function()
 end)
 
 ns.On("PLAYER_REGEN_ENABLED", function()
+    fightEndedT = Now()
     if not fight then return end
     local dur = Now() - fight.t0
     Count("fights")
@@ -1095,6 +1107,28 @@ ns.On("UI_ERROR_MESSAGE", function(a, b)
     ns.Tally("errors", msg, msg)
 end)
 ns.On("SCREENSHOT_SUCCEEDED", function() Count("screenshots") end)
+
+-- Appearance collection (clients that have one): the event counts, the chat line supplies the name
+local lastLook = nil
+ns.On("TRANSMOG_COLLECTION_SOURCE_ADDED", function(sourceID)
+    Count("appearances")
+    lastLook = Event("LOOK", { id = ns.Num(sourceID) })
+end)
+local LOOK_PAT = Pat(ERR_LEARN_TRANSMOG_S or "%s has been added to your appearance collection.")
+local function LookLine(msg)
+    msg = ns.Str(msg)
+    local item = msg and msg:match(LOOK_PAT)
+    if not item then return end
+    local name = ns.LinkName(item) or item
+    if lastLook and Now() - lastLook.t <= 3 and not lastLook.n then
+        lastLook.n = name
+    elseif not (lastLook and Now() - lastLook.t <= 3) then
+        Count("appearances") -- no event on this client: the line is all we have
+        lastLook = Event("LOOK", { n = name })
+    end
+end
+ns.On("CHAT_MSG_SYSTEM", LookLine)
+ns.On("CHAT_MSG_LOOT", LookLine)
 ns.On("PLAYER_PVP_KILLS_CHANGED", function() Count("honorKills") end)
 
 ns.On("CHAT_MSG_GUILD", OnChat("guild"))

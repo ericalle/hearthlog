@@ -185,21 +185,24 @@ if M.forever then
     M.party = {} -- damage to the target only counts as yours while solo
     M.units.target = { name = "Kobold Vermin", guid = "Creature-0-1-0-1-6-0003", hostile = true }
     M.targetGUID = "Creature-0-1-0-1-6-0003"
+    fire("PLAYER_TARGET_CHANGED")
+    fire("PLAYER_REGEN_DISABLED")
     fire("UNIT_COMBAT", "target", "WOUND", "CRITICAL", 31, 1)
     fire("UNIT_COMBAT", "target", "DODGE", "", 0, 1)
     fire("UNIT_COMBAT", "player", "WOUND", "", 12, 1)
     fire("UNIT_COMBAT", "player", "HEAL", "", 40, 2)
     M.xp = M.xp + 45
-    fire("PLAYER_XP_UPDATE")
-    fire("CHAT_MSG_COMBAT_XP_GAIN", "Kobold Vermin dies, you gain 45 experience.")
+    fire("PLAYER_XP_UPDATE")      -- an XP gain in combat with a hostile target: a kill
     M.Advance(1)
-    fire("CHAT_MSG_COMBAT_XP_GAIN", "Young Wolf dies, you gain 30 experience. (+6 group bonus)")
-    M.Advance(1)
+    fire("PLAYER_REGEN_ENABLED")
+    M.Advance(3)
     fire("CHAT_MSG_COMBAT_HONOR_GAIN", "Stabbyjoe dies, honorable kill Rank: Scout (Estimated Honor Points: 12)")
     fire("RESURRECT_REQUEST", "Danwar")
     fire("UNIT_AURA", "player", { addedAuras = { { name = "Power Word: Fortitude", isHelpful = true, sourceUnit = "party1" } } })
     M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }
     fire("UNIT_AURA", "player", { addedAuras = { { name = "Arcane Intellect", isHelpful = true, sourceUnit = "party1" } } })
+    fire("TRANSMOG_COLLECTION_SOURCE_ADDED", 12345)
+    fire("CHAT_MSG_SYSTEM", "|cff9d9d9d|Hitem:2491::::::::1:::::|h[Frayed Robe]|h|r has been added to your appearance collection.")
     M.units.target = { name = "Mangy Wolf", guid = "Creature-0-1-0-1-299-0020", hostile = true }
     M.targetGUID = "Creature-0-1-0-1-299-0020"
     M.dead = true
@@ -210,6 +213,9 @@ if M.forever then
 
     -- A grouped fight read back from the game's damage meter once combat ends
     M.party = { "party1" }
+    M.units.target = { name = "Kobold Vermin", guid = "Creature-0-1-0-1-6-0003", hostile = true }
+    M.targetGUID = "Creature-0-1-0-1-6-0003"
+    fire("PLAYER_TARGET_CHANGED")
     fire("PLAYER_REGEN_DISABLED")
     M.Advance(25)
     M.meter = { dur = 25,
@@ -224,9 +230,13 @@ if M.forever then
     fire("PLAYER_REGEN_ENABLED")
     M.Advance(2)
     fire("PLAYER_REGEN_ENABLED") -- a second read of the same fight must not double count
-    M.Advance(2)
-    fire("CHAT_MSG_COMBAT_XP_GAIN", "Kobold Vermin dies, you gain 20 experience. (+4 group bonus)")
-    fire("CHAT_MSG_COMBAT_XP_GAIN", "Boar dies, you gain 20 experience. (+4 group bonus)")
+    M.Advance(1)
+    M.xp = M.xp + 20
+    fire("PLAYER_XP_UPDATE")      -- right after a grouped fight the meter saw us in: an assist
+    M.Advance(1)
+    M.Advance(10)
+    M.xp = M.xp + 20
+    fire("PLAYER_XP_UPDATE")      -- long after combat: not a kill
     M.Advance(1)
 end
 
@@ -379,13 +389,14 @@ if not FOREVER:
     assert c.petDeaths == 1, "pet death"
 else:
     t = char.tallies
-    assert c.kills == 1 and c.assists == 1 and c.partyKills == 2 and kinds["KILL"] == 2, \
-        "kills from xp lines (kills=%s assists=%s party=%s events=%s)" % (c.kills, c.assists, c.partyKills, kinds["KILL"])
+    assert c.kills == 1 and c.assists == 1 and c.partyKills == 0 and kinds["KILL"] == 2, \
+        "kills from xp gains (kills=%s assists=%s party=%s events=%s)" % (c.kills, c.assists, c.partyKills, kinds["KILL"])
     assist = [e for e in char.events.values() if e.k == "KILL" and e.assist][0]
-    assert assist.n == "Kobold Vermin" and assist.group == True, "assist is the creature the meter saw us damage"
+    assert assist.n == "Kobold Vermin" and assist.group == True and assist.xp == 20, "assist is the creature the meter saw us damage"
+    assert c.appearances == 1 and [e for e in char.events.values() if e.k == "LOOK"][0].n == "Frayed Robe", "appearance learned, named from the line"
     kv = [e for e in char.events.values() if e.k == "KILL" and e.n == "Kobold Vermin"][0]
     assert kv.xp == 45 and kv.lvl is not None, "kill carries xp and target level"
-    assert c.xpKill == 115, "xp classified as kill xp (kill=%s other=%s)" % (c.xpKill, c.xpOther)
+    assert c.xpKill == 65, "xp classified as kill xp (kill=%s other=%s)" % (c.xpKill, c.xpOther)
     assert c.maxHitDone == 31 and c.critsDone == 1 and c.dodged == 1, "hits via UNIT_COMBAT"
     assert c.maxHitTaken == 12 and c.healingTaken == 40, "taken via UNIT_COMBAT"
     assert c.damageDone == 400 and c.damageTaken == 150 and c.healingDone == 80, "totals from the meter (done=%s taken=%s healed=%s)" % (c.damageDone, c.damageTaken, c.healingDone)

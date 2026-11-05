@@ -64,15 +64,21 @@ local function ReadFight(fightEvent, fightDur)
     local me, meGUID = nil, nil
     local groupTotal = 0
     local sources = {}
+    local myName, myGUID = Str(UnitName("player")), Str(UnitGUID("player"))
     for _, src in ipairs(dmg.combatSources) do
         local total = Num(src.totalAmount)
         if total == nil then return false end
         local name = Str(src.name)
         local guid = Str(src.sourceGUID)
-        tinsert(sources, { name = name, guid = guid, total = total, me = src.isLocalPlayer == true })
+        local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and Short(name) == myName)
+        tinsert(sources, { name = name, guid = guid, total = total, me = isMe })
         groupTotal = groupTotal + total
-        if src.isLocalPlayer then me, meGUID = src, guid end
+        if isMe then me, meGUID = src, guid end
     end
+    -- Alone with a single source and no way to tell: it is us
+    if not me and #sources == 1 and not IsInGroup() then me, meGUID = dmg.combatSources[1], sources[1].guid; sources[1].me = true end
+    if meGUID == nil then meGUID = myGUID end
+    if ns.debug then ns.Print(string.format("meter: %d sources, me=%s, dur=%d", #sources, me and "yes" or "no", dur)) end
     local key = string.format("%d|%d|%d", math.floor(dur), math.floor(groupTotal), #sources)
     if key == lastKey then return true end
     lastKey = key
@@ -122,7 +128,9 @@ local function ReadFight(fightEvent, fightDur)
             local total = Num(src.totalAmount) or 0
             local guid = Str(src.sourceGUID)
             local name = Str(src.name)
-            if src.isLocalPlayer then
+            local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and Short(name) == myName)
+            if isMe then
+                guid = guid or myGUID
                 Count("healingDone", total)
                 if fightEvent then fightEvent.healed = total end
                 local det = guid and Source(T.HealingDone, guid)
@@ -154,11 +162,14 @@ local function ReadFight(fightEvent, fightDur)
     local taken = Session(T.DamageTaken)
     if type(taken) == "table" and type(taken.combatSources) == "table" then
         for _, src in ipairs(taken.combatSources) do
-            if src.isLocalPlayer then
+            local guid = Str(src.sourceGUID)
+            local name = Str(src.name)
+            local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and Short(name) == myName)
+            if isMe then
                 local total = Num(src.totalAmount) or 0
                 Count("damageTaken", total)
                 if fightEvent then fightEvent.taken = total end
-                local guid = Str(src.sourceGUID)
+                guid = guid or myGUID
                 local det = guid and Source(T.DamageTaken, guid)
                 if type(det) == "table" and type(det.combatSpells) == "table" then
                     for _, sp in ipairs(det.combatSpells) do
@@ -175,7 +186,10 @@ local function ReadFight(fightEvent, fightDur)
         local s = Session(pair[1])
         if type(s) == "table" and type(s.combatSources) == "table" then
             for _, src in ipairs(s.combatSources) do
-                if src.isLocalPlayer then Count(pair[2], Num(src.totalAmount) or 0) end
+                local guid, name = Str(src.sourceGUID), Str(src.name)
+                if src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and Short(name) == myName) then
+                    Count(pair[2], Num(src.totalAmount) or 0)
+                end
             end
         end
     end
@@ -184,10 +198,36 @@ end
 
 local function Poll(fightEvent, fightDur)
     local ok, done = pcall(ReadFight, fightEvent, fightDur)
+    if not ok and ns.debug then ns.Print("meter error: " .. tostring(done)) end
     if ok and done then return end
     attempts = attempts + 1
     if attempts >= 15 then return end -- about 9 seconds; the meter stayed secret (pvp, or a new fight started)
     C_Timer.After(0.6, function() Poll(fightEvent, fightDur) end)
+end
+
+-- /hl meter: what the game's meter holds right now, field by field, for the person reading the screenshot
+function ns.MeterDump()
+    local P = ns.Print
+    local ok, avail, why = pcall(function() return CallIn(C_DamageMeter, "IsDamageMeterAvailable") end)
+    P(string.format("meter available: %s %s", tostring(avail), tostring(why or "")))
+    local s = Session(T.DamageDone)
+    if type(s) ~= "table" then P("no DamageDone session: " .. tostring(s)) return end
+    P(string.format("DamageDone: %d sources, duration %s, total %s", type(s.combatSources) == "table" and #s.combatSources or -1,
+        tostring(s.durationSeconds), tostring(s.totalAmount)))
+    for i, src in ipairs(s.combatSources or {}) do
+        local secret = (type(issecretvalue) == "function" and issecretvalue(src.totalAmount)) and " (secret)" or ""
+        P(string.format("  %d: name=%s local=%s total=%s%s guid=%s", i, tostring(src.name), tostring(src.isLocalPlayer), tostring(src.totalAmount), secret, tostring(src.sourceGUID)))
+        local det = Source(T.DamageDone, Str(src.sourceGUID) or Str(UnitGUID("player")))
+        if type(det) == "table" and type(det.combatSpells) == "table" then
+            for j, sp in ipairs(det.combatSpells) do
+                if j > 4 then break end
+                P(string.format("     spell %s %s on %s", tostring(sp.spellID), tostring(sp.totalAmount), tostring(sp.creatureName)))
+            end
+        else
+            P("     per-spell: " .. tostring(det))
+        end
+    end
+    P(string.format("lastKey=%s attempts=%d", tostring(lastKey), attempts))
 end
 
 ns.On("PLAYER_REGEN_ENABLED", function()
