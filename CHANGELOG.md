@@ -1,5 +1,15 @@
 # Hearthlog changelog
 
+## 0.3.8
+- Fixes the "this addon has had a lot of errors" popup on Forever. The event probe's handler was the one piece of
+  code not protected against errors; an event it could not describe (secret values) threw on every occurrence,
+  and spell casts fire several such events. Every timer, ticker and hook is now guarded too, errors are kept
+  in a short list instead of reaching the game, and `/hl errors` prints them.
+
+## 0.3.7
+- The event probe no longer keeps a sample of chat events (it kept the first line seen per chat event type).
+  Existing samples are cleared on login.
+
 ## 0.3.6
 - Util.lua was aborting during load on Forever at the client-detection line (the interface number read through
   `select` while addons load), which left the combat fallbacks off and the login line warning that Util was

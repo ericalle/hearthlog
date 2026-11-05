@@ -31,24 +31,27 @@ local function Describe(...)
         local v = select(i, ...)
         local t = type(v)
         types[i] = t:sub(1, 1) -- s n b t f n(il)
-        if t == "string" then sample[i] = v:sub(1, 40):gsub("|", "/")
+        if type(issecretvalue) == "function" and issecretvalue(v) then sample[i] = "secret"
+        elseif t == "string" then sample[i] = v:sub(1, 40):gsub("|", "/")
         elseif t == "number" or t == "boolean" then sample[i] = tostring(v)
         else sample[i] = t end
     end
     return table.concat(types, ""), table.concat(sample, " | ")
 end
 
-frame:SetScript("OnEvent", function(_, event, ...)
+frame:SetScript("OnEvent", ns.Guard("probe", function(_, event, ...)
     local store = ns.char and ns.char.probe and ns.char.probe.events
     if not store then return end
     local rec = store[event]
     if not rec then
         local types, sample = Describe(...)
-        rec = { n = 0, args = types, sample = NOISY[event] and nil or sample, first = ns.Now() }
+        -- Chat events carry what people said: never keep their sample, only the type signature
+        local keep = not NOISY[event] and not event:find("^CHAT_MSG")
+        rec = { n = 0, args = types, sample = keep and sample or nil, first = ns.Now() }
         store[event] = rec
     end
     rec.n = rec.n + 1
-end)
+end))
 
 function ns.ProbeActive() return active end
 

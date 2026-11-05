@@ -203,7 +203,7 @@ local function Poll(fightEvent, fightDur)
     if ok and done then return end
     attempts = attempts + 1
     if attempts >= 15 then return end -- about 9 seconds; the meter stayed secret (pvp, or a new fight started)
-    C_Timer.After(0.6, function() Poll(fightEvent, fightDur) end)
+    ns.After(0.6, function() Poll(fightEvent, fightDur) end)
 end
 
 -- /hl meter: what the game's meter holds right now, field by field, for the person reading the screenshot
@@ -235,7 +235,7 @@ ns.On("PLAYER_REGEN_ENABLED", function()
     attempts = 0
     local e = ns.lastFightEvent
     ns.lastFightEvent = nil
-    C_Timer.After(0.6, function() Poll(e) end)
+    ns.After(0.6, function() Poll(e) end)
 end)
 
 ns.LOADED.Meter = true

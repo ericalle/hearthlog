@@ -323,7 +323,7 @@ return char, kinds, ns.ExportString()
 ''', ns)
 char, kinds, export_str = script
 export_len = len(export_str)
-errors = [line for line in M.printed.values() if "handler error" in line]
+errors = [line for line in M.printed.values() if ("handler error" in line or "error in " in line)]
 if errors:
     print("\nHANDLER ERRORS:")
     for e in errors: print(" ", e)

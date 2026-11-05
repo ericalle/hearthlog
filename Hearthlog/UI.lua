@@ -786,6 +786,6 @@ function ns.ToggleUI(skinId)
 end
 
 -- Keep the window fresh while open
-C_Timer.NewTicker(2, function() if frame and frame:IsShown() then ns.RefreshUI() end end)
+ns.Ticker(2, function() if frame and frame:IsShown() then ns.RefreshUI() end end)
 
 ns.LOADED.UI = true

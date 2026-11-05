@@ -195,7 +195,7 @@ end
 function ns.OnSessionOpen()
     buffer, idle, hidden, lastSampleT = {}, 0, false, nil
     last.wx, last.wy, last.inst, last.map = nil, nil, nil, nil
-    if not ticker then ticker = C_Timer.NewTicker(TICK, Tick) end
+    if not ticker then ticker = ns.Ticker(TICK, Tick) end
 end
 
 function ns.OnSessionClose()

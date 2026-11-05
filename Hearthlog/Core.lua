@@ -79,7 +79,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
     if not list then return end
     for _, fn in ipairs(list) do
         local ok, err = pcall(fn, ...)
-        if not ok and ns.debug then Print(event .. " handler error: " .. tostring(err)) end
+        if not ok then ns.NoteError(event, err) end
     end
 end)
 
@@ -122,6 +122,9 @@ local function InitChar()
     char.tallies = char.tallies or {}
     for _, name in ipairs(TALLIES) do char.tallies[name] = char.tallies[name] or {} end
     char.probe = char.probe or { events = {} }
+    for name, rec in pairs(char.probe.events or {}) do
+        if type(name) == "string" and name:find("^CHAT_MSG") and type(rec) == "table" then rec.sample = nil end
+    end
     char.records = char.records or {}
     if ns.db.settings and ns.db.settings.ui ~= "b" then ns.db.settings.ui = "b" end
     -- Spells the game casts on its own (login effect, auto attack) are not casts; drop any already tallied
@@ -221,7 +224,7 @@ local function RequestPlayed()
     waitingPlayed = true
     Silence()
     pcall(RequestTimePlayed)
-    C_Timer.After(3, function()
+    ns.After(3, function()
         waitingPlayed = false
         Unsilence()
     end)
@@ -378,6 +381,9 @@ SlashCmdList.HEARTHLOG = function(msg)
         if ns.WhoHasAddon then ns.WhoHasAddon() end
     elseif cmd == "version" then
         Print(string.format("v%s  ·  %s", ns.VERSION, ns.URL))
+    elseif cmd == "errors" then
+        Print(string.format("%d errors caught this session; last %d:", ns.errorCount or 0, #ns.errors))
+        for _, e in ipairs(ns.errors) do Print("  " .. e) end
     elseif cmd == "diag" then
         local files = { "Util", "Compat", "Core", "Track", "Events", "Modern", "Meter", "Probe", "Export", "Version", "UI" }
         local missing = {}
@@ -424,7 +430,7 @@ ns.On("PLAYER_ENTERING_WORLD", function(isLogin, isReload)
     if not entered then
         entered = true
         OpenSession(isReload)
-        C_Timer.After(3, RequestPlayed)
+        ns.After(3, RequestPlayed)
         if ns.Setting("loginLine") then Print(string.format("recording %s (session %d). /hl opens the log.", ns.key, ns.sessionIndex)) end
         -- A file that failed to load is worth a loud line, whatever the settings say
         local missing = {}

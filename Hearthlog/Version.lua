@@ -64,7 +64,7 @@ function ns.WhoHasAddon()
     ns.peers = peers
     Announce("Q")
     Print("asking guild and group who has Hearthlog...")
-    C_Timer.After(3, function()
+    ns.After(3, function()
         local names = {}
         for n in pairs(peers) do tinsert(names, n) end
         table.sort(names)
@@ -85,11 +85,11 @@ ns.On("PLAYER_LOGIN", function()
     if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
         pcall(C_ChatInfo.RegisterAddonMessagePrefix, PREFIX)
     end
-    C_Timer.After(10, function() Announce("V:" .. ns.VERSION) end)
+    ns.After(10, function() Announce("V:" .. ns.VERSION) end)
 end)
 
 ns.On("GROUP_ROSTER_UPDATE", function()
-    if IsInGroup() then C_Timer.After(2, function() Announce("V:" .. ns.VERSION) end) end
+    if IsInGroup() then ns.After(2, function() Announce("V:" .. ns.VERSION) end) end
 end)
 
 ns.On("CHAT_MSG_ADDON", function(prefix, message, _, sender)

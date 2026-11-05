@@ -164,7 +164,7 @@ ns.On("PLAYER_LEVEL_UP", function(level)
     lastLevelT = now
     Count("levels")
     ns.lastLevelUpT = now -- Gz detection
-    if ns.RequestPlayed then C_Timer.After(2, ns.RequestPlayed) end
+    if ns.RequestPlayed then ns.After(2, ns.RequestPlayed) end
     if ns.Setting("levelSummary") then
         local c = ns.char.counters
         ns.Print(string.format("level %d%s · %d kills, %d deaths so far", level, since and (" after " .. ns.Duration(since)) or "", c.kills, c.deaths))
@@ -210,7 +210,7 @@ ns.On("PLAYER_XP_UPDATE", function()
         end
     end
     -- Without the combat log, a quest turn-in or discovery line may land just after this event
-    if ns.NO_CLEU then C_Timer.After(0.5, classify) else classify() end
+    if ns.NO_CLEU then ns.After(0.5, classify) else classify() end
 end)
 
 -- "Discovered: Northshire Abbey"
@@ -247,7 +247,7 @@ ns.On("QUEST_TURNED_IN", function(questID, xp, gold)
 end)
 
 ns.On("QUEST_REMOVED", function(questID)
-    C_Timer.After(1, function()
+    ns.After(1, function()
         if turnedIn[questID] then
             turnedIn[questID] = nil
             return
@@ -293,7 +293,7 @@ local function RefreshGuild()
 end
 ns.On("GUILD_ROSTER_UPDATE", RefreshGuild)
 ns.On("PLAYER_ENTERING_WORLD", function()
-    C_Timer.After(6, function()
+    ns.After(6, function()
         if not (IsInGuild and IsInGuild()) then return end
         if C_GuildInfo and C_GuildInfo.GuildRoster then CallIn(C_GuildInfo, "GuildRoster") elseif GuildRoster then Call("GuildRoster") end
     end)
@@ -538,7 +538,7 @@ ns.On("PLAYER_DEAD", function()
     Event("DEATH", e)
     -- Wipe: everyone in the party dead a moment later
     if instance and #party > 0 then
-        C_Timer.After(3, function()
+        ns.After(3, function()
             local prefix, count = "party", GetNumSubgroupMembers()
             if IsInRaid() then prefix, count = "raid", GetNumGroupMembers() end
             for i = 1, count do
@@ -621,12 +621,12 @@ function ns.OnEnterWorld()
     lastXP = UnitXP("player")
     guildName = GetGuildInfo("player")
     party = {}
-    C_Timer.After(2, function()
+    ns.After(2, function()
         ZoneCheck()
         InstanceCheck()
     end)
     -- Party names arrive a moment after login; the first diff records who was already there
-    C_Timer.After(4, RosterDiff)
+    ns.After(4, RosterDiff)
 end
 
 -- ---------------------------------------------------------
@@ -635,7 +635,7 @@ end
 ns.On("GROUP_ROSTER_UPDATE", function()
     RosterDiff()
     -- Names can still be "Unknown" on the first update; look again shortly
-    C_Timer.After(3, RosterDiff)
+    ns.After(3, RosterDiff)
 end)
 
 -- ---------------------------------------------------------
@@ -650,7 +650,7 @@ ns.On("TRAINER_SHOW", function() SetCtx("trainer") end)
 ns.On("TAXIMAP_OPENED", function() SetCtx("taxi") end)
 ns.On("BANKFRAME_OPENED", function() SetCtx("bank") end)
 if hooksecurefunc and RepairAllItems then
-    hooksecurefunc("RepairAllItems", function() SetCtx("repair") end)
+    ns.Hook("RepairAllItems", function() SetCtx("repair") end)
 end
 local pendingFare = nil -- Copper paid at the flight master, picked up when the taxi starts
 
@@ -777,16 +777,16 @@ local function UsedItem(link)
 end
 if hooksecurefunc then
     if C_Container and C_Container.UseContainerItem then
-        hooksecurefunc(C_Container, "UseContainerItem", function(bag, slot)
+        ns.Hook(C_Container, "UseContainerItem", function(bag, slot)
             UsedItem(CallIn(C_Container, "GetContainerItemLink", bag, slot))
         end)
     elseif UseContainerItem then
-        hooksecurefunc("UseContainerItem", function(bag, slot)
+        ns.Hook("UseContainerItem", function(bag, slot)
             UsedItem(Call("GetContainerItemLink", bag, slot))
         end)
     end
     if UseAction then
-        hooksecurefunc("UseAction", function(slot)
+        ns.Hook("UseAction", function(slot)
             local kind, id = Call("GetActionInfo", slot)
             if kind == "item" and id then
                 local _, link = ns.ItemInfo(id)
@@ -795,7 +795,7 @@ if hooksecurefunc then
         end)
     end
     if BuyMerchantItem then
-        hooksecurefunc("BuyMerchantItem", function(index, quantity)
+        ns.Hook("BuyMerchantItem", function(index, quantity)
             local link = Call("GetMerchantItemLink", index)
             if not link then return end
             local rec = ns.Tally("bought", ns.ItemId(link), ns.LinkName(link), { q = ns.LinkQuality(link) })
@@ -803,7 +803,7 @@ if hooksecurefunc then
         end)
     end
     if UseItemByName then
-        hooksecurefunc("UseItemByName", function(name)
+        ns.Hook("UseItemByName", function(name)
             local _, link = ns.ItemInfo(name)
             UsedItem(link)
         end)
@@ -812,7 +812,7 @@ end
 
 -- Taxi start and end are noticed by polling, since Classic has no clean event for the landing
 local wasOnTaxi = false
-C_Timer.NewTicker(2, function()
+ns.Ticker(2, function()
     if not ns.char then return end
     local on = UnitOnTaxi("player") and true or false
     if on and not wasOnTaxi then
@@ -837,7 +837,7 @@ ns.On("DUEL_REQUESTED", function(name) lastDuel = { who = name, t = Now() } end)
 ns.On("DUEL_FINISHED", function()
     local requested = lastDuel
     lastDuel = nil
-    C_Timer.After(3, function()
+    ns.After(3, function()
         if Now() - duelResultT <= 6 then return end -- a real duel, already recorded
         if requested then Count("duelRequests") end -- someone asked, we did not fight
     end)
@@ -876,7 +876,7 @@ ns.On("PLAYER_GUILD_UPDATE", function(unit)
 end)
 
 if JumpOrAscendStart and hooksecurefunc then
-    hooksecurefunc("JumpOrAscendStart", function()
+    ns.Hook("JumpOrAscendStart", function()
         if ns.char and not ns.paused and ns.Setting("countJumps") then Count("jumps") end
     end)
 end
@@ -993,7 +993,7 @@ end
 for _, ev in ipairs({ "TRADE_SHOW", "TRADE_ACCEPT_UPDATE", "TRADE_PLAYER_ITEM_CHANGED", "TRADE_TARGET_ITEM_CHANGED", "TRADE_MONEY_CHANGED" }) do
     ns.On(ev, SnapTrade)
 end
-ns.On("TRADE_CLOSED", function() C_Timer.After(2, function() tradeSnap = nil end) end)
+ns.On("TRADE_CLOSED", function() ns.After(2, function() tradeSnap = nil end) end)
 function ns.TradeComplete()
     local s = tradeSnap
     tradeSnap = nil
@@ -1038,17 +1038,17 @@ local function InboxMoney(index)
 end
 if hooksecurefunc then
     if TakeInboxItem then
-        hooksecurefunc("TakeInboxItem", function(index, itemIndex) InboxItem(index, Call("GetInboxItemLink", index, itemIndex)) end)
+        ns.Hook("TakeInboxItem", function(index, itemIndex) InboxItem(index, Call("GetInboxItemLink", index, itemIndex)) end)
     end
-    if TakeInboxMoney then hooksecurefunc("TakeInboxMoney", function(index) InboxMoney(index) end) end
+    if TakeInboxMoney then ns.Hook("TakeInboxMoney", function(index) InboxMoney(index) end) end
     if AutoLootMailItem then
-        hooksecurefunc("AutoLootMailItem", function(index)
+        ns.Hook("AutoLootMailItem", function(index)
             for i = 1, (ATTACHMENTS_MAX_RECEIVE or 16) do InboxItem(index, Call("GetInboxItemLink", index, i)) end
             InboxMoney(index)
         end)
     end
     if SendMail then
-        hooksecurefunc("SendMail", function(recipient)
+        ns.Hook("SendMail", function(recipient)
             local to = Short(recipient)
             if not to or to == "" then return end
             local items = 0
@@ -1065,7 +1065,7 @@ if hooksecurefunc then
 
     -- Auction house (the Classic API; Retail's C_AuctionHouse is not covered)
     if PlaceAuctionBid and GetAuctionItemInfo then
-        hooksecurefunc("PlaceAuctionBid", function(kind, index, bid)
+        ns.Hook("PlaceAuctionBid", function(kind, index, bid)
             local name, _, count, quality, _, _, _, _, _, buyout, _, _, _, _, _, _, itemId = Call("GetAuctionItemInfo", kind, index)
             if not name then return end
             bid = tonumber(bid) or 0
@@ -1083,7 +1083,7 @@ if hooksecurefunc then
         local rec = ns.Tally("ahPosted", name, name, { q = quality })
         if rec then rec.n = rec.n + total - 1 end
     end
-    if PostAuction then hooksecurefunc("PostAuction", Posted) elseif StartAuction then hooksecurefunc("StartAuction", Posted) end
+    if PostAuction then ns.Hook("PostAuction", Posted) elseif StartAuction then ns.Hook("StartAuction", Posted) end
 end
 
 -- Whispers per person: who, how many each way. Never the text.
@@ -1163,7 +1163,7 @@ end)
 
 -- Instance tracking needs the world to be loaded each time we zone
 ns.On("PLAYER_ENTERING_WORLD", function()
-    C_Timer.After(2, InstanceCheck)
+    ns.After(2, InstanceCheck)
 end)
 
 ns.LOADED.Events = true

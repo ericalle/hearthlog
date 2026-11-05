@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.6"
+ns.VERSION = "0.3.8"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -213,6 +213,34 @@ function ns.CoinString(copper)
     if g > 0 then return string.format("%dg %ds %dc", g, s, c) end
     if s > 0 then return string.format("%ds %dc", s, c) end
     return string.format("%dc", c)
+end
+
+-- ---------------------------------------------------------
+-- Error guard: nothing the addon runs outside an event handler may reach the game's error
+-- handler (Midnight-family clients throttle an addon that errors often, with a popup that
+-- forces a reload). Errors are kept in a short list instead: /hl errors.
+-- ---------------------------------------------------------
+ns.errors = {}
+ns.errorCount = 0
+function ns.NoteError(where, err)
+    ns.errorCount = ns.errorCount + 1
+    local list = ns.errors
+    list[#list + 1] = tostring(where) .. ": " .. tostring(err)
+    if #list > 20 then table.remove(list, 1) end
+    if ns.debug then ns.Print("error in " .. tostring(where) .. ": " .. tostring(err)) end
+end
+function ns.Guard(where, fn)
+    return function(...)
+        local ok, err = pcall(fn, ...)
+        if not ok then ns.NoteError(where, err) end
+    end
+end
+function ns.After(delay, fn) C_Timer.After(delay, ns.Guard("timer", fn)) end
+function ns.Ticker(period, fn) return C_Timer.NewTicker(period, ns.Guard("ticker", fn)) end
+function ns.Hook(a, b, c)
+    if type(hooksecurefunc) ~= "function" then return end
+    if type(a) == "table" then hooksecurefunc(a, b, ns.Guard("hook " .. tostring(b), c))
+    else hooksecurefunc(a, ns.Guard("hook " .. tostring(a), b)) end
 end
 
 ns.LOADED = { Util = true }
