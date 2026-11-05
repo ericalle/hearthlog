@@ -66,7 +66,7 @@ local function Mode(dist, speed)
     if formID == 3 or formID == 4 or formID == 27 or formID == 29 then return "v" end -- travel, aquatic, flight forms
     -- Carried by a boat, zeppelin or tram: the world moves under a standing player.
     -- A single tick can read speed 0 mid-run (a jump landing), so two in a row are needed.
-    if dist and dist >= TRANSPORT_MIN and dist < TELEPORT and speed and speed < 0.1 then
+    if dist and dist >= TRANSPORT_MIN and dist < TELEPORT and (speed == nil or speed < 0.1) then
         transportTicks = transportTicks + 1
         if transportTicks >= 2 then return "b" end
     else
@@ -134,7 +134,8 @@ local function Tick()
     local dist = 0
     local sameWorld = last.wx and last.inst == inst
     if sameWorld then dist = math.sqrt((wx - last.wx) ^ 2 + (wy - last.wy) ^ 2) end
-    local speed = ns.Call("GetUnitSpeed", "player")
+    -- Forever keeps the player's speed secret; without it the boat test falls back to distance alone
+    local speed = ns.Num(ns.Call("GetUnitSpeed", "player"))
     local moved = (not sameWorld) or dist >= MOVE_MIN
 
     if not moved then

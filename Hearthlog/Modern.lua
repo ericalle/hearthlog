@@ -124,8 +124,13 @@ end)
 
 -- New helpful auras on the player, credited to group members when the source is a group unit
 ns.On("UNIT_AURA", function(unit, info)
-    if unit ~= "player" or type(info) ~= "table" or type(info.addedAuras) ~= "table" then return end
-    for _, aura in ipairs(info.addedAuras) do
+    if unit ~= "player" then return end
+    info = ns.Tbl(info)
+    local added = info and ns.Tbl(info.addedAuras)
+    if not added then return end
+    for _, aura in ipairs(added) do
+        aura = ns.Tbl(aura)
+        if not aura then break end
         local src = ns.Str(aura.sourceUnit)
         if aura.isHelpful and not aura.isFromPlayerOrPlayerPet and src and (src:find("^party") or src:find("^raid")) then
             local who = Short(ns.Str(UnitName(src)))

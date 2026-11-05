@@ -55,8 +55,9 @@ local function ReadFight(fightEvent, fightDur)
     end)
     if ok and avail == false then return true end
 
-    local dmg = Session(T.DamageDone)
-    if type(dmg) ~= "table" or type(dmg.combatSources) ~= "table" then return true end
+    local dmg = ns.Tbl(Session(T.DamageDone))
+    if not dmg then return false end -- secret or missing: try again
+    if not ns.Tbl(dmg.combatSources) then return false end
     local dur = Num(dmg.durationSeconds)
     if dur == nil then return false end -- still secret
     if #dmg.combatSources == 0 then return true end -- nothing was recorded for this combat
@@ -104,7 +105,8 @@ local function ReadFight(fightEvent, fightDur)
 
     -- My damage by ability and by target
     local mine = meGUID and Source(T.DamageDone, meGUID)
-    if type(mine) == "table" and type(mine.combatSpells) == "table" then
+    mine = ns.Tbl(mine)
+    if mine and ns.Tbl(mine.combatSpells) then
         for _, sp in ipairs(mine.combatSpells) do
             local id = Num(sp.spellID)
             local amt = Num(sp.totalAmount)
@@ -122,8 +124,8 @@ local function ReadFight(fightEvent, fightDur)
     end
 
     -- Healing: mine by ability and target, others' healing on me
-    local heal = Session(T.HealingDone)
-    if type(heal) == "table" and type(heal.combatSources) == "table" then
+    local heal = ns.Tbl(Session(T.HealingDone))
+    if heal and ns.Tbl(heal.combatSources) then
         local myName = Str(UnitName("player"))
         for _, src in ipairs(heal.combatSources) do
             local total = Num(src.totalAmount) or 0
@@ -134,8 +136,8 @@ local function ReadFight(fightEvent, fightDur)
                 guid = guid or myGUID
                 Count("healingDone", total)
                 if fightEvent then fightEvent.healed = total end
-                local det = guid and Source(T.HealingDone, guid)
-                if type(det) == "table" and type(det.combatSpells) == "table" then
+                local det = ns.Tbl(guid and Source(T.HealingDone, guid))
+                if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
                         local id, amt, target = Num(sp.spellID), Num(sp.totalAmount), Str(sp.creatureName)
                         if id and amt then
@@ -148,8 +150,8 @@ local function ReadFight(fightEvent, fightDur)
                 local rec = ns.Tally("groupHeal", Short(name), Short(name))
                 if rec then rec.d = (rec.d or 0) + total end
                 -- Did they heal me? Their per-target breakdown says
-                local det = guid and Source(T.HealingDone, guid)
-                if type(det) == "table" and type(det.combatSpells) == "table" then
+                local det = ns.Tbl(guid and Source(T.HealingDone, guid))
+                if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
                         local amt, target = Num(sp.totalAmount), Str(sp.creatureName)
                         if amt and target and myName and Short(target) == myName then AddD("healedBy", Short(name), Short(name), amt) end
@@ -160,8 +162,8 @@ local function ReadFight(fightEvent, fightDur)
     end
 
     -- Damage taken: total and by attacker
-    local taken = Session(T.DamageTaken)
-    if type(taken) == "table" and type(taken.combatSources) == "table" then
+    local taken = ns.Tbl(Session(T.DamageTaken))
+    if taken and ns.Tbl(taken.combatSources) then
         for _, src in ipairs(taken.combatSources) do
             local guid = Str(src.sourceGUID)
             local name = Str(src.name)
@@ -171,8 +173,8 @@ local function ReadFight(fightEvent, fightDur)
                 Count("damageTaken", total)
                 if fightEvent then fightEvent.taken = total end
                 guid = guid or myGUID
-                local det = guid and Source(T.DamageTaken, guid)
-                if type(det) == "table" and type(det.combatSpells) == "table" then
+                local det = ns.Tbl(guid and Source(T.DamageTaken, guid))
+                if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
                         local amt, who = Num(sp.totalAmount), Str(sp.creatureName)
                         if amt and who and who ~= "" then AddD("hurtBy", who, who, amt) end
@@ -184,8 +186,8 @@ local function ReadFight(fightEvent, fightDur)
 
     -- Interrupts, dispels, absorbs: my totals
     for _, pair in ipairs({ { T.Interrupts, "interrupts" }, { T.Dispels, "dispels" }, { T.Absorbs, "absorbs" } }) do
-        local s = Session(pair[1])
-        if type(s) == "table" and type(s.combatSources) == "table" then
+        local s = ns.Tbl(Session(pair[1]))
+        if s and ns.Tbl(s.combatSources) then
             for _, src in ipairs(s.combatSources) do
                 local guid, name = Str(src.sourceGUID), Str(src.name)
                 if src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and Short(name) == myName) then

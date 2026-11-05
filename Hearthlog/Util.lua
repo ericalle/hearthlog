@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.8"
+ns.VERSION = "0.3.9"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -120,6 +120,16 @@ end
 -- ---------------------------------------------------------
 -- Small helpers every file relies on (kept here, in the first file, so they always exist)
 -- ---------------------------------------------------------
+-- True when the client made this value secret (type() still reports its normal type)
+function ns.IsSecret(v)
+    return v ~= nil and type(issecretvalue) == "function" and issecretvalue(v) == true
+end
+-- A table you may iterate, or nil
+function ns.Tbl(v)
+    if type(v) ~= "table" or ns.IsSecret(v) then return nil end
+    return v
+end
+
 -- A number, or nil if the client made it secret (arithmetic on a secret throws)
 function ns.Num(v)
     if v == nil then return nil end

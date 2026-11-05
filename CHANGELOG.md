@@ -1,5 +1,10 @@
 # Hearthlog changelog
 
+## 0.3.9
+- Forever keeps the player's movement speed secret; the sampler compared it every tick and errored every tick.
+  Speed is now optional (the boat test falls back to distance). Aura update payloads and meter tables are
+  checked for secrecy before being iterated.
+
 ## 0.3.8
 - Fixes the "this addon has had a lot of errors" popup on Forever. The event probe's handler was the one piece of
   code not protected against errors; an event it could not describe (secret values) threw on every occurrence,
