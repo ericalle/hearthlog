@@ -1,5 +1,19 @@
 # Hearthlog changelog
 
+## 0.3.14
+- The right-hand pane is laid out in two real columns: the count, date or time on the left, the text on the
+  right, wrapping under itself. Numbers of different lengths no longer push the text around.
+- Removed the "About this client" note from the Combat tab.
+- Forever: looted items were never counted. Item links there are colored by a quality token, not a hex
+  color, and the loot line did not match. Loot by quality and Items looted work from this version on.
+- Forever: chat, whispers and mail carry surnames ("Cup Kekw") while trades and the party list give "Cup".
+  Everything is kept under the first name now, and lists made before this version are folded together at
+  login. This also fixes counting your own chat messages there.
+- Loot rolls are matched on the wording of the chat line with the "[Loot]:" link stripped. On Forever that
+  link carries a history id, which had been taken for the winner's name, and the rolls themselves were
+  never matched. Rolls, wins and best roll per player work there now, including the one-line
+  "(Need - 93, Main-Spec) Won:" form.
+
 ## 0.3.13
 Fixes from a read-through of the whole addon. No new features.
 - Forever: kills less than three seconds apart were dropped (three quick kills recorded as one).

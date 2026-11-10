@@ -127,6 +127,40 @@ local function InitChar()
         if type(name) == "string" and name:find("^CHAT_MSG") and type(rec) == "table" then rec.sample = nil end
     end
     char.records = char.records or {}
+    -- Forever: lists made before 0.3.14 hold "First Last" names from chat and the meter. Fold them into the
+    -- first name so each person appears once. Roll "winners" that are only digits were never players.
+    if ns.NO_CLEU then
+        local me = UnitName("player")
+        local function Fold(group, drop)
+            local t = char.tallies[group]
+            local moves = {}
+            for key in pairs(t) do
+                if type(key) == "string" and key:find(" ", 1, true) then tinsert(moves, key) end
+            end
+            for _, key in ipairs(moves) do
+                local rec, first = t[key], ns.PlayerName(key)
+                t[key] = nil
+                if first ~= drop and type(rec) == "table" then
+                    local into = t[first]
+                    if not into then
+                        rec.nm = first
+                        t[first] = rec
+                    else
+                        for k, v in pairs(rec) do
+                            if type(v) == "number" then
+                                if k == "hi" then into[k] = math.max(into[k] or 0, v) else into[k] = (into[k] or 0) + v end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        for _, group in ipairs({ "whispers", "mailTo", "groupDmg", "groupHeal", "groupDeaths", "healedBy", "rolls" }) do Fold(group) end
+        Fold("healedTo", me) -- your own heals on yourself were listed there under your full name
+        for key in pairs(char.tallies.rolls) do
+            if type(key) == "string" and key:match("^%d+$") then char.tallies.rolls[key] = nil end
+        end
+    end
     if ns.db.settings and ns.db.settings.ui ~= "b" then ns.db.settings.ui = "b" end
     -- Spells the game casts on its own (login effect, auto attack) are not casts; drop any already tallied
     for id in pairs(ns.AUTO_SPELLS or {}) do char.tallies.spells[id] = nil end

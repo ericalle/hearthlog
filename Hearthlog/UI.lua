@@ -248,13 +248,7 @@ function CONTENT.combat()
     tinsert(rows, { "Healing received", tostring(c.healingTaken), RecordNote(r.healTaken, "from", "biggest") })
     if c.absorbs > 0 then tinsert(rows, { "Absorbs", tostring(c.absorbs) }) end
 
-    local lines = {}
-    if ns.NO_CLEU then
-        tinsert(lines, { title = "ABOUT THIS CLIENT" })
-        tinsert(lines, { "", "Addons get no combat log here. Kills come from XP gains," })
-        tinsert(lines, { "", ns.HAS_METER and "damage and healing from the game's meter after each fight." or "damage from your own frame only." })
-    end
-    tinsert(lines, { title = "MOST KILLED" })
+    local lines = { { title = "MOST KILLED" } }
     local kills = {}
     for _, e in ipairs(ns.char.events) do
         if e.k == "KILL" and e.n then kills[e.n] = (kills[e.n] or 0) + 1 end
@@ -413,7 +407,7 @@ function CONTENT.friends()
         { header = "TRADING" },
         { "Trades", tostring(c.trades) },
         { "Mail sent", tostring(c.mailSent) },
-        { "Rolls", tostring(c.rolls), string.format("%d won", c.rollsWon) },
+        c.rolls > 0 and { "Rolls", tostring(c.rolls), string.format("%d won", c.rollsWon) } or { "Rolls won", tostring(c.rollsWon) },
         { header = "PVP" },
         { "Player kills", tostring(c.pvpKills) },
         { "Deaths to players", tostring(c.pvpDeaths), "", c.pvpDeaths > 0 and "red" or nil },
@@ -446,7 +440,9 @@ function CONTENT.friends()
     Section("HEALING IN YOUR GROUPS", TopBy("groupHeal", "d", 6), function(s)
         return { tostring(s.rec.d or 0), string.format("%s, %d fights", s.rec.nm or s.id, s.rec.n or 0) } end)
     Section("LUCKIEST ROLLERS", TopBy("rolls", "w", 6), function(s)
-        return { tostring(s.rec.w or 0), string.format("%s, won %d of %d rolls, best %d", s.rec.nm or s.id, s.rec.w or 0, (s.rec.n or 0) + (s.rec.w or 0), s.rec.hi or 0) } end)
+        -- Some clients only announce the winner, not each roll
+        if (s.rec.hi or 0) == 0 then return { tostring(s.rec.w or 0), string.format("%s", s.rec.nm or s.id) } end
+        return { tostring(s.rec.w or 0), string.format("%s, won %d of %d rolls, best %d", s.rec.nm or s.id, s.rec.w or 0, (s.rec.n or 0) + (s.rec.w or 0), s.rec.hi) } end)
     Section("PLAYERS YOU KILLED", Top("pvpKills", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id) } end)
     Section("PLAYERS WHO KILLED YOU", Top("killedByPlayers", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id), "red" } end)
     return rows, lines
@@ -614,11 +610,7 @@ local function Build()
     widgets.logChild = CreateFrame("Frame", nil, widgets.scroll)
     widgets.logChild:SetSize(1, 1)
     widgets.scroll:SetScrollChild(widgets.logChild)
-    widgets.logText = widgets.logChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    widgets.logText:SetPoint("TOPLEFT")
-    widgets.logText:SetJustifyH("LEFT")
-    widgets.logText:SetJustifyV("TOP")
-    widgets.logText:SetSpacing(4)
+    widgets.lines = {} -- one stamp + text pair per line, made as needed (see LogLine)
 
     -- Tabs
     widgets.tabs = {}
@@ -646,6 +638,21 @@ local function Build()
         b:Hide()
         widgets.buttons[i] = b
     end
+end
+
+local STAMP_W = 60
+local function LogLine(i)
+    local l = widgets.lines[i]
+    if l then return l end
+    l = {}
+    l.stamp = widgets.logChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    l.stamp:SetJustifyH("LEFT")
+    if l.stamp.SetWordWrap then l.stamp:SetWordWrap(false) end
+    l.text = widgets.logChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    l.text:SetJustifyH("LEFT")
+    l.text:SetJustifyV("TOP")
+    widgets.lines[i] = l
+    return l
 end
 
 local function ApplySkin(id)
@@ -698,7 +705,6 @@ local function ApplySkin(id)
         r.bg:SetShown(id == "b" and i % 2 == 0)
         r.leader:SetColorTexture(skin.note[1], skin.note[2], skin.note[3], skin.ruled and 0.35 or 0)
     end
-    Font(widgets.logText, skin.bodyFont, 12, skin.label)
 
     -- Tabs: right edge for the journal, hanging below for the game style
     for i, b in ipairs(widgets.tabs) do
@@ -791,19 +797,43 @@ function ns.RefreshUI()
         end
     end
 
-    local out = {}
-    local hex = function(c) return string.format("|cff%02x%02x%02x", c[1] * 255, c[2] * 255, c[3] * 255) end
-    for _, l in ipairs(lines) do
+    -- Right pane: a narrow column for the count, date or time, and a text column that wraps under itself
+    local width = (widgets.scroll:GetWidth() or 0) - 4
+    if width < 100 then width = W - LEFT_W - 96 end -- not laid out yet on the very first frame
+    local y = 0
+    for i, l in ipairs(lines) do
+        local w = LogLine(i)
+        w.stamp:ClearAllPoints()
+        w.text:ClearAllPoints()
+        local stamp = (not l.title) and l[1] or ""
         if l.title then
-            tinsert(out, hex(skin.header) .. l.title .. "|r")
+            if i > 1 then y = y + 6 end
+            Font(w.text, skin.font, 12, skin.header)
         else
-            local color = l[3] and skin[l[3]] or skin.label
-            tinsert(out, string.format("%s%-8s|r %s%s|r", hex(skin.note), l[1] or "", hex(color), l[2] or ""))
+            Font(w.text, skin.bodyFont, 12, l[3] and skin[l[3]] or skin.label)
         end
+        if stamp == "" then
+            w.stamp:Hide()
+            w.text:SetPoint("TOPLEFT", 0, -y)
+            w.text:SetWidth(width)
+        else
+            Font(w.stamp, skin.bodyFont, 12, skin.note)
+            w.stamp:SetPoint("TOPLEFT", 0, -y)
+            w.stamp:SetWidth(STAMP_W)
+            w.stamp:SetText(stamp)
+            w.stamp:Show()
+            w.text:SetPoint("TOPLEFT", STAMP_W + 8, -y)
+            w.text:SetWidth(width - STAMP_W - 8)
+        end
+        w.text:SetText(l.title or l[2] or "")
+        w.text:Show()
+        y = y + math.max(w.text:GetStringHeight() or 0, 12) + 5
     end
-    widgets.logText:SetWidth(widgets.scroll:GetWidth() - 4)
-    widgets.logText:SetText(table.concat(out, "\n"))
-    widgets.logChild:SetSize(widgets.scroll:GetWidth() - 4, widgets.logText:GetStringHeight() + 8)
+    for i = #lines + 1, #widgets.lines do
+        widgets.lines[i].stamp:Hide()
+        widgets.lines[i].text:Hide()
+    end
+    widgets.logChild:SetSize(width, y + 8)
     RefreshTabs()
 end
 

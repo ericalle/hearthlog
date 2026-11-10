@@ -43,7 +43,7 @@ local function Announce(message)
 end
 
 local function OnMessage(message, sender)
-    local name = sender and (Ambiguate and Ambiguate(sender, "short") or sender)
+    local name = ns.PlayerName(sender and (Ambiguate and Ambiguate(sender, "short") or sender))
     if not name or name == UnitName("player") then return end
     local kind, version = message:match("^(%a):?(.*)$")
     if kind == "Q" then

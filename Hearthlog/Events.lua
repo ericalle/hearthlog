@@ -50,7 +50,7 @@ local function IsGroupFlag(flags) return type(flags) == "number" and bit.band(fl
 local levelOf = {}             -- GUID -> level, from whatever we target, mouse over or see on a nameplate
 local levelN = 0
 
-local Short = ns.ShortName
+local Short, PlayerName = ns.ShortName, ns.PlayerName
 local function IsPlayerOrPet(guid) return type(guid) == "string" and (guid:sub(1, 6) == "Player" or guid:sub(1, 3) == "Pet") end
 local function IsPlayer(guid) return type(guid) == "string" and guid:sub(1, 6) == "Player" end
 local Pat = ns.Pat
@@ -283,7 +283,7 @@ local function IsPlayerGUID(guid) return type(guid) == "string" and guid:sub(1, 
 
 local function InParty(name)
     if not name then return false end
-    local short = name:match("^([^%-]+)") or name
+    local short = PlayerName(name)
     for _, m in ipairs(party) do
         if m:match("^([^:]+)") == short then return true end
     end
@@ -298,7 +298,7 @@ local function RefreshGuild()
     local names = {}
     for i = 1, n do
         local name = Call("GetGuildRosterInfo", i)
-        if name then names[Short(name)] = true end
+        if name then names[PlayerName(name)] = true end
     end
     guildNames = names
 end
@@ -310,7 +310,7 @@ ns.On("PLAYER_ENTERING_WORLD", function()
     end)
 end)
 local function IsFriend(name)
-    local short = Short(name)
+    local short = PlayerName(name)
     return short ~= nil and (InParty(short) or guildNames[short] == true)
 end
 
@@ -693,7 +693,7 @@ ns.On("CHAT_MSG_LOOT", function(msg)
     if not msg then return end
     -- "You receive loot: [link]x3." / "You receive item: [link]." / "You create: [link]."
     if not (msg:find("^You receive") or msg:find("^You create")) then return end
-    local link = msg:match("|c%x+|Hitem:.-|h%[.-%]|h|r")
+    local link = msg:match("|c[^|]*|Hitem:.-|h%[.-%]|h|r") -- "|cff1eff00|Hitem" or the modern "|cnIQ2:|Hitem"
     if not link then return end
     local count = tonumber(msg:match("|h|rx(%d+)")) or 1
     local q = ns.LinkQuality(link) or 0
@@ -934,6 +934,7 @@ ns.On("CHAT_MSG_SYSTEM", function(msg)
     end
     if not winner then return end
     local me = UnitName("player")
+    winner, loser = PlayerName(winner), PlayerName(loser)
     if winner ~= me and loser ~= me then return end -- someone else's duel nearby
     duelResultT = Now()
     Count("duels")
@@ -965,7 +966,7 @@ local function OnChat(chan)
         local low = msg:lower()
         for _, pat in ipairs(GZ) do
             if low:find(pat) then
-                local name = sender and Ambiguate and Ambiguate(sender, "short") or sender
+                local name = PlayerName(sender and Ambiguate and Ambiguate(sender, "short") or sender)
                 if name == UnitName("player") then return end
                 Count("gz")
                 Event("GZ", { who = name, chan = chan })
@@ -977,7 +978,7 @@ end
 -- Emotes you perform: "Zinther dances." -> "dances"
 ns.On("CHAT_MSG_TEXT_EMOTE", function(msg, sender)
     local me = UnitName("player")
-    local short = sender and (sender:match("^([^%-]+)") or sender)
+    local short = PlayerName(sender)
     if short ~= me or not msg then return end
     local verb = msg:match("^" .. me .. " (%a+)")
     if not verb then return end
@@ -987,8 +988,7 @@ end)
 
 -- Messages you send, counted per channel (the text is never stored)
 local function SentBy(sender)
-    local short = sender and (sender:match("^([^%-]+)") or sender)
-    return short == UnitName("player")
+    return PlayerName(sender) == UnitName("player")
 end
 local function CountChat(chan)
     return function(msg, sender)
@@ -1008,45 +1008,67 @@ ns.On("CHAT_MSG_WHISPER_INFORM", CountChat("whisper"))
 ns.On("CHAT_MSG_CHANNEL", CountChat("channel"))
 
 -- ---------------------------------------------------------
--- Loot rolls: "Need Roll - 97 for [item] by Danwar", "Danwar won: [item]", "You won: [item]"
+-- Loot rolls, matched on the visible wording (English clients). Lines seen in game:
+--   Greed Roll - 86 for [item] by Talenel Unbroken        every roll, when the client lists them
+--   You won: [item]   /   Danwar won: [item]              the winner
+--   Danwar (Need - 93, Main-Spec) Won: [item]             winner and roll in one line, when rolls are not listed
+-- Modern clients put a "[Loot]: " link carrying a history id in front, which is stripped first. (Building
+-- patterns from the client's own templates took that id for the player's name.)
 -- ---------------------------------------------------------
-local ROLL_PATS = { -- "by you" first, or the "by %s" form would catch it with a player named "you"
-    { Pat(LOOT_ROLL_ROLLED_NEED_SELF or "Need Roll - %d for %s by you"), true },
-    { Pat(LOOT_ROLL_ROLLED_GREED_SELF or "Greed Roll - %d for %s by you"), true },
-    { Pat(LOOT_ROLL_ROLLED_NEED or "Need Roll - %d for %s by %s"), false },
-    { Pat(LOOT_ROLL_ROLLED_GREED or "Greed Roll - %d for %s by %s"), false },
-}
-local WON_PAT = Pat(LOOT_ROLL_WON or "%s won: %s")
-local YOU_WON_PAT = Pat(LOOT_ROLL_YOU_WON or "You won: %s")
 local myLastRoll = nil
-ns.On("CHAT_MSG_LOOT", function(msg)
-    if type(msg) ~= "string" then return end
-    for _, p in ipairs(ROLL_PATS) do
-        local roll, item, who = msg:match(p[1])
-        if roll then
-            roll = tonumber(roll)
-            who = p[2] and UnitName("player") or Short(who)
-            if not who then return end
-            local rec = ns.Tally("rolls", who, who)
-            if rec then
-                rec.s = (rec.s or 0) + roll
-                if roll > (rec.hi or 0) then rec.hi = roll end
-            end
-            if p[2] then Count("rolls"); myLastRoll = roll end
-            return
-        end
-    end
-    local item = msg:match(YOU_WON_PAT)
-    local who = item and UnitName("player")
-    if not item then who, item = msg:match(WON_PAT); who = Short(who) end
-    if not item or not who then return end
+local function RollBody(msg)
+    msg = msg:gsub("^|c%x%x%x%x%x%x%x%x", "")
+    local body = msg:match("^|H.-|h.-|h:%s*(.*)$") or msg
+    return (body:gsub("^%[Loot%]:%s*", ""))
+end
+local function Roller(name)
+    if not name or name == "" or name:find("[|:%[%]]") then return nil end
+    if name:lower() == "you" then return UnitName("player") end
+    return PlayerName(name)
+end
+local function NoteRoll(who, roll)
     local rec = ns.Tally("rolls", who, who)
-    if rec then rec.n = rec.n - 1; rec.w = (rec.w or 0) + 1 end -- a win is not another roll
+    if rec then
+        rec.s = (rec.s or 0) + roll
+        if roll > (rec.hi or 0) then rec.hi = roll end
+    end
+    if who == UnitName("player") then Count("rolls"); myLastRoll = roll end
+    return rec
+end
+local function NoteWin(who, item, rec)
+    rec = rec or ns.Tally("rolls", who, who)
+    if rec then rec.w = (rec.w or 0) + 1 end
     if who == UnitName("player") then
         Count("rollsWon")
         Event("WON", { n = ns.LinkName(item) or item, q = ns.LinkQuality(item), roll = myLastRoll })
         myLastRoll = nil
     end
+end
+ns.On("CHAT_MSG_LOOT", function(msg)
+    msg = ns.Str(msg)
+    if not msg then return end
+    local body = RollBody(msg)
+    -- A roll
+    local kind, roll, item, who = body:match("^(%a+) Roll %- (%d+) for (.+) by (.+)$")
+    if kind then
+        who = Roller(who)
+        if who then NoteRoll(who, tonumber(roll)) end
+        return
+    end
+    -- Winner and roll in one line
+    who, kind, roll, item = body:match("^(.-) %((%a+) %- (%d+)[^%)]*%) Won: (.+)$")
+    if who then
+        who = Roller(who)
+        if who then NoteWin(who, item, NoteRoll(who, tonumber(roll))) end
+        return
+    end
+    -- The winner of rolls that were listed one by one
+    who, item = body:match("^(.-) won: (.+)$")
+    who = Roller(who)
+    if not who or not item then return end
+    local rec = ns.Tally("rolls", who, who)
+    if rec then rec.n = rec.n - 1 end -- a win is not another roll
+    NoteWin(who, item, rec)
 end)
 
 -- ---------------------------------------------------------
@@ -1125,7 +1147,7 @@ if hooksecurefunc then
     end
     if SendMail then
         ns.Hook("SendMail", function(recipient)
-            local to = Short(recipient)
+            local to = PlayerName(recipient)
             if not to or to == "" then return end
             local items = 0
             for i = 1, (ATTACHMENTS_MAX_SEND or 12) do
@@ -1195,13 +1217,13 @@ end
 
 -- Whispers per person: who, how many each way. Never the text.
 ns.On("CHAT_MSG_WHISPER", function(msg, sender)
-    local who = Short(sender)
+    local who = PlayerName(ns.Str(sender))
     if not who or who == "" then return end
     local rec = ns.Tally("whispers", who, who)
     if rec then rec.i = (rec.i or 0) + 1 end
 end)
 ns.On("CHAT_MSG_WHISPER_INFORM", function(msg, target)
-    local who = Short(target)
+    local who = PlayerName(ns.Str(target))
     if not who or who == "" then return end
     local rec = ns.Tally("whispers", who, who)
     if rec then rec.o = (rec.o or 0) + 1 end

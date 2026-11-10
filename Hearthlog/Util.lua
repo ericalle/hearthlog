@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.13"
+ns.VERSION = "0.3.14"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -72,6 +72,9 @@ local QUALITY_BY_COLOR = {
 }
 function ns.LinkQuality(link)
     if type(link) ~= "string" then return nil end
+    -- Modern clients color item links by quality token ("|cnIQ2:"), older ones by hex color
+    local token = link:match("|cnIQ(%d+):")
+    if token then return tonumber(token) end
     local color = link:match("|cff(%x%x%x%x%x%x)")
     return color and QUALITY_BY_COLOR[color:lower()] or nil
 end
@@ -155,6 +158,13 @@ end
 
 function ns.ShortName(name)
     return name and (name:match("^([^%-]+)") or name) or nil
+end
+
+-- A player's plain character name: no realm and no surname. Forever shows "First Last" in chat, mail and
+-- the meter, while unit functions give "First"; every list is kept under the first name.
+function ns.PlayerName(name)
+    if type(name) ~= "string" then return nil end
+    return name:match("^([^%-%s]+)") or name
 end
 
 -- ---------------------------------------------------------

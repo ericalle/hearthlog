@@ -66,6 +66,45 @@ return c.damageDone, t.healedBy.Danwar and t.healedBy.Danwar.d, t.healedTo["Zint
     t.groupDmg.Danwar and t.groupDmg.Danwar.d, c.meterFights''')
 assert (done, healed_by, healed_to_self, group, fights) == (112, 60, None, 80, 2), (done, healed_by, healed_to_self, group, fights)
 
+# Forever: item links are colored by quality token, chat and mail carry surnames, and older lists get folded
+loot, green, whisper, mail_to, roll_names = run(True, '''
+M.Fire("CHAT_MSG_LOOT", "You receive loot: |cnIQ2:|Hitem:2140::::::::20:::::|h[Carving Knife]|h|rx2.")
+M.Fire("CHAT_MSG_WHISPER", "hi", "Cup Kekw-CAMWOWUS2Realm4PvP")
+M.Fire("CHAT_MSG_WHISPER_INFORM", "hey", "Cup Kekw")
+SendMail("Vayden Ravenheart", "x", "")
+local L, item = "|HlootHistory:237553411|h[Loot]|h: ", "|cnIQ2:|Hitem:2140::::::::20:::::|h[Carving Knife]|h|r"
+M.Fire("CHAT_MSG_LOOT", L .. "You have selected Greed for: " .. item)
+M.Fire("CHAT_MSG_LOOT", L .. "Greed Roll - 86 for " .. item .. " by Zinther Unbroken")
+M.Fire("CHAT_MSG_LOOT", L .. "Greed Roll - 12 for " .. item .. " by Tonka Trukk")
+M.Fire("CHAT_MSG_LOOT", L .. "You won: " .. item)
+M.Fire("CHAT_MSG_LOOT", L .. "Tonka Trukk (Need - 93, Main-Spec) Won: " .. item)
+local t, c = ns.char.tallies, ns.char.counters
+local names = {}
+for k in pairs(t.rolls) do names[#names + 1] = k end
+table.sort(names)
+local me, tonka, won = t.rolls.Zinther, t.rolls.Tonka, nil
+for _, e in ipairs(ns.char.events) do if e.k == "WON" then won = e end end
+assert(c.rolls == 1 and c.rollsWon == 1 and me.n == 1 and me.w == 1 and me.hi == 86, "my roll and win")
+assert(tonka.n == 2 and tonka.w == 1 and tonka.hi == 93, "Tonka: two rolls, one win, best 93")
+assert(won and won.n == "Carving Knife" and won.q == 2 and won.roll == 86, "WON event names the item and the roll")
+return c.lootItems, c.lootGreen, t.whispers.Cup and (t.whispers.Cup.i * 10 + t.whispers.Cup.o), t.mailTo.Vayden and t.mailTo.Vayden.n, table.concat(names, ",")''')
+assert (loot, green, whisper, mail_to, roll_names) == (2, 1, 11, 1, "Tonka,Zinther"), (loot, green, whisper, mail_to, roll_names)
+
+rt, ns = boot(True)
+folded = rt.execute('''
+local M, ns = MOCK, ...
+local t = ns.char.tallies
+t.groupDmg["Tonka Trukk"] = { n = 118, d = 88214, nm = "Tonka Trukk" }
+t.groupDmg["Tonka"] = { n = 2, d = 100, nm = "Tonka" }
+t.whispers["Krek Bank"] = { n = 1, o = 1, nm = "Krek Bank" }
+t.healedTo["Zinther Unbroken"] = { n = 4, d = 40 }
+t.rolls["237553411"] = { n = 0, w = 1 }
+t.rolls["Zinther"] = { n = 0, w = 16 }
+M.Fire("PLAYER_LOGIN")
+return t.groupDmg.Tonka.d * 1000 + t.groupDmg.Tonka.n, t.groupDmg["Tonka Trukk"], t.whispers.Krek and t.whispers.Krek.nm,
+    t.healedTo["Zinther Unbroken"] or t.healedTo.Zinther, t.rolls["237553411"], t.rolls.Zinther.w''', ns)
+assert tuple(folded) == (88314120, None, "Krek", None, None, 16), tuple(folded)
+
 for forever in (False, True):
     # Played time on the second level-up of a session
     first, second, true_second = run(forever, '''
