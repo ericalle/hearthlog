@@ -29,6 +29,7 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   LOOT       i=itemID, n=name, q=quality
 --   GEAR       slot=, i=itemID, n=name, q=quality
 --   SPELL      i=spellID, n=name
+--   TALENT     n=talent name, id=spellID, v=rank now (trait clients only; tab clients have talents= on LEVEL)
 --   SKILL      n=skill name, v=new value (only every 25 points; every skill-up updates tallies.skills)
 --   REP        txt=chat line
 --   HEARTH     to=bind location
@@ -142,16 +143,82 @@ local function GearSnapshot()
     return gear
 end
 
--- "Holy 0/Protection 5/Retribution 12" on clients with talent tabs, nil elsewhere
+-- Talents on clients built on the trait system (Retail; Forever if it is built the same way): every
+-- talent with points in it, as { [spellID] = rank }. nil where that system or its data is not there.
+local function TraitTalents()
+    if not (C_ClassTalents and C_Traits) then return nil end
+    local config = ns.Num(ns.CallIn(C_ClassTalents, "GetActiveConfigID"))
+    local info = config and ns.Tbl(ns.CallIn(C_Traits, "GetConfigInfo", config))
+    local trees = info and ns.Tbl(info.treeIDs)
+    if not trees then return nil end
+    local out = {}
+    for _, tree in ipairs(trees) do
+        for _, node in ipairs(ns.Tbl(ns.CallIn(C_Traits, "GetTreeNodes", tree)) or {}) do
+            local ni = ns.Tbl(ns.CallIn(C_Traits, "GetNodeInfo", config, node))
+            -- Points you put in, not ranks the class hands out for free
+            local rank = ni and (ns.Num(ni.ranksPurchased) or ns.Num(ni.activeRank)) or 0
+            local entry = ni and ns.Tbl(ni.activeEntry)
+            local entryID = entry and ns.Num(entry.entryID)
+            if rank > 0 and entryID then
+                local ei = ns.Tbl(ns.CallIn(C_Traits, "GetEntryInfo", config, entryID))
+                local def = ei and ns.Num(ei.definitionID) and ns.Tbl(ns.CallIn(C_Traits, "GetDefinitionInfo", ei.definitionID))
+                local spell = def and ns.Num(def.spellID)
+                if spell then out[spell] = rank end
+            end
+        end
+    end
+    return out
+end
+local function TalentName(spell)
+    local name = C_Spell and C_Spell.GetSpellName and ns.Str(ns.CallIn(C_Spell, "GetSpellName", spell)) or ns.Str((Call("GetSpellInfo", spell)))
+    return name or tostring(spell)
+end
+-- "Holy 0/Protection 5/Retribution 12" on clients with talent tabs, "Benediction 5/Improved Blessing of
+-- Might 2" on trait clients, nil when neither answers
 local function TalentSnapshot()
     local n = Call("GetNumTalentTabs")
-    if type(n) ~= "number" or n == 0 then return nil end
     local parts = {}
-    for i = 1, n do
-        local name, _, spent = Call("GetTalentTabInfo", i)
-        if name then tinsert(parts, string.format("%s %d", name, tonumber(spent) or 0)) end
+    if type(n) == "number" and n > 0 then
+        for i = 1, n do
+            local name, _, spent = Call("GetTalentTabInfo", i)
+            if name then tinsert(parts, string.format("%s %d", name, tonumber(spent) or 0)) end
+        end
+    else
+        for spell, rank in pairs(TraitTalents() or {}) do tinsert(parts, string.format("%s %d", TalentName(spell), rank)) end
+        table.sort(parts)
     end
     return #parts > 0 and table.concat(parts, "/") or nil
+end
+-- A TALENT event for each point spent on a trait client. The first look of a session only sets the baseline.
+local lastTalents, talentCheckDue = nil, false
+local function TalentCheck()
+    talentCheckDue = false
+    local now = TraitTalents()
+    if not now then return end
+    if lastTalents then
+        for spell, rank in pairs(now) do
+            if rank > (lastTalents[spell] or 0) then Event("TALENT", { n = TalentName(spell), id = spell, v = rank }) end
+        end
+    end
+    lastTalents = now
+end
+for _, ev in ipairs({ "TRAIT_CONFIG_UPDATED", "TRAIT_CONFIG_LIST_UPDATED", "PLAYER_TALENT_UPDATE" }) do
+    ns.On(ev, function()
+        if talentCheckDue or not (C_ClassTalents and C_Traits) then return end
+        talentCheckDue = true
+        ns.After(1, TalentCheck)
+    end)
+end
+-- /hl talents: which talent functions this client has and what they return
+function ns.TalentDump()
+    local config = C_ClassTalents and ns.CallIn(C_ClassTalents, "GetActiveConfigID")
+    local info = config and C_Traits and ns.Tbl(ns.CallIn(C_Traits, "GetConfigInfo", config))
+    local trees = info and ns.Tbl(info.treeIDs)
+    ns.Print(string.format("talent functions: GetNumTalentTabs=%s (%s) GetTalentInfo=%s C_SpecializationInfo.GetTalentInfo=%s C_ClassTalents=%s C_Traits=%s",
+        type(GetNumTalentTabs), tostring((Call("GetNumTalentTabs"))), type(GetTalentInfo),
+        type(C_SpecializationInfo and C_SpecializationInfo.GetTalentInfo), type(C_ClassTalents), type(C_Traits)))
+    ns.Print(string.format("active config=%s trees=%s", tostring(config), trees and tostring(#trees) or "none"))
+    ns.Print("read as: " .. tostring(TalentSnapshot()))
 end
 -- Total time played right now: the /played total at login plus this session so far
 local function PlayedNow()
@@ -947,9 +1014,14 @@ end)
 ns.On("PLAYER_GUILD_UPDATE", function(unit)
     if unit and unit ~= "player" then return end
     local name = GetGuildInfo("player")
-    if name == guildName then return end
+    if name == nil and IsInGuild and IsInGuild() then return end -- guild info has not loaded yet
+    -- Compared with what was saved, not with what this login has seen: the name is always "new" after a login
+    local meta = ns.char and ns.char.meta
+    if not meta or (name or false) == meta.guild then return end
+    local first = meta.guild == nil and name == nil -- never in a guild: nothing to log
+    meta.guild = name or false
     guildName = name
-    Event("GUILD", { n = name })
+    if not first then Event("GUILD", { n = name }) end
 end)
 
 if JumpOrAscendStart and hooksecurefunc then
@@ -975,16 +1047,26 @@ local function OnChat(chan)
         end
     end
 end
--- Emotes you perform: "Zinther dances." -> "dances"
-ns.On("CHAT_MSG_TEXT_EMOTE", function(msg, sender)
-    local me = UnitName("player")
-    local short = PlayerName(sender)
-    if short ~= me or not msg then return end
-    local verb = msg:match("^" .. me .. " (%a+)")
-    if not verb then return end
-    Count("emotes")
-    ns.Tally("emotes", verb:lower(), verb:lower())
-end)
+-- Emotes you perform, by command word ("dance", "wave"). In chat your own emote reads "You burst into
+-- dance.", with no name to match and no command word, so the call that sends it is counted instead. The
+-- function moved on the modern client; where the old name still exists it passes the call along, and one
+-- emote must not count twice. "read" is left out: the game performs it for you when you open the map.
+do
+    local lastToken, lastAt = nil, nil
+    local function OnEmote(token)
+        token = ns.Str(token)
+        if not token or token == "" or not ns.char then return end
+        token = token:lower()
+        if token == "read" then return end
+        local at = GetTime and GetTime() or Now()
+        if token == lastToken and at == lastAt then return end
+        lastToken, lastAt = token, at
+        Count("emotes")
+        ns.Tally("emotes", token, token)
+    end
+    if DoEmote then ns.Hook("DoEmote", OnEmote) end
+    if C_ChatInfo and C_ChatInfo.PerformEmote then ns.Hook(C_ChatInfo, "PerformEmote", OnEmote) end
+end
 
 -- Messages you send, counted per channel (the text is never stored)
 local function SentBy(sender)
@@ -1198,13 +1280,29 @@ if hooksecurefunc then
         end
         if C_AuctionHouse.PostItem then ns.Hook(C_AuctionHouse, "PostItem", PostedModern) end
         if C_AuctionHouse.PostCommodity then ns.Hook(C_AuctionHouse, "PostCommodity", PostedModern) end
-        if C_AuctionHouse.StartCommoditiesPurchase then
-            ns.Hook(C_AuctionHouse, "StartCommoditiesPurchase", function(itemID, quantity)
-                local name = ns.ItemInfo(itemID)
-                Count("ahBuyouts")
-                local rec = ns.Tally("ahBought", itemID, name)
-                if rec then rec.n = rec.n + (tonumber(quantity) or 1) - 1 end
-            end)
+        -- Buying a stackable item is two calls: Start asks for a price, Confirm buys. Only Confirm is a
+        -- purchase; the price is the quote the game sent back in between.
+        local quote = nil -- { total, t }
+        ns.On("COMMODITY_PRICE_UPDATED", function(_, total)
+            total = ns.Num(total)
+            quote = total and { total = total, t = Now() } or nil
+        end)
+        local function BoughtCommodity(itemID, quantity)
+            local name = ns.ItemInfo(itemID)
+            local cost = quote and (Now() - quote.t) <= 120 and quote.total or 0
+            quote = nil
+            Count("ahBuyouts")
+            if cost > 0 then Count("ahSpent", cost) end
+            local rec = ns.Tally("ahBought", itemID, name)
+            if rec then
+                rec.n = rec.n + (tonumber(quantity) or 1) - 1
+                if cost > 0 then rec.c = (rec.c or 0) + cost end
+            end
+        end
+        if C_AuctionHouse.ConfirmCommoditiesPurchase then
+            ns.Hook(C_AuctionHouse, "ConfirmCommoditiesPurchase", BoughtCommodity)
+        elseif C_AuctionHouse.StartCommoditiesPurchase then
+            ns.Hook(C_AuctionHouse, "StartCommoditiesPurchase", BoughtCommodity)
         end
         if C_AuctionHouse.PlaceBid then
             ns.Hook(C_AuctionHouse, "PlaceBid", function(auctionID, bid)
@@ -1241,14 +1339,21 @@ ns.On("SCREENSHOT_SUCCEEDED", function() Count("screenshots") end)
 local lastLook = nil
 ns.On("TRANSMOG_COLLECTION_SOURCE_ADDED", function(sourceID)
     Count("appearances")
-    lastLook = Event("LOOK", { id = ns.Num(sourceID) })
+    local id, name, item = ns.Num(sourceID), nil, nil
+    if id and C_TransmogCollection and C_TransmogCollection.GetSourceInfo then
+        local info = ns.Tbl(CallIn(C_TransmogCollection, "GetSourceInfo", id))
+        if info then
+            name, item = ns.Str(info.name), ns.Num(info.itemID)
+            if not name and item then name = ns.Str((ns.ItemInfo(item))) end
+        end
+    end
+    lastLook = Event("LOOK", { id = id, n = name, i = item })
 end)
-local LOOK_PAT = Pat(ERR_LEARN_TRANSMOG_S or "%s has been added to your appearance collection.")
 local function LookLine(msg)
     msg = ns.Str(msg)
-    local item = msg and msg:match(LOOK_PAT)
-    if not item then return end
-    local name = ns.LinkName(item) or item
+    if not msg or not msg:find("has been added to your appearance collection", 1, true) then return end
+    local name = ns.LinkName(msg)
+    if not name then return end
     if lastLook and Now() - lastLook.t <= 3 and not lastLook.n then
         lastLook.n = name
     elseif not (lastLook and Now() - lastLook.t <= 3) then

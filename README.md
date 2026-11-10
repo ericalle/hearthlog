@@ -32,7 +32,7 @@ newer version, and `/hl who` shows who has it.
 
 | Command | What it does |
 | --- | --- |
-| `/hl` | Opens the Hearthlog window (Overview, Journey, Combat, Loot, Settings) |
+| `/hl` | Opens the Hearthlog window (Overview, Journey, Combat, Loot, Friends, Settings) |
 | `/hl status` | The same numbers printed to chat |
 | `/hl events [n]` | The last n events (default 10) |
 | `/hl top <group> [n]` | Top entries of a tally: `items`, `used`, `spells`, `skills`, `buffs`, `emotes`, `chat`, `gold` |
@@ -42,6 +42,10 @@ newer version, and `/hl who` shows who has it.
 | `/hl pause` | Stop recording until typed again or relog |
 | `/hl export` | The character's data as one compressed string you can copy |
 | `/hl debug` | Print handler errors to chat |
+| `/hl errors` | Errors the addon caught this session |
+| `/hl diag` | Which client this is, which files loaded and which game functions exist |
+| `/hl meter` | What the game's damage meter holds for the last fight (Forever and Retail) |
+| `/hl talents` | Which talent functions this client has and what they return |
 | `/hl reset confirm` | Erase this character's journey |
 
 ## Where the data is

@@ -130,7 +130,11 @@ function M.ForeverMode()
     M.forever = true
     _G.GetBuildInfo = function() return "1.60.1", "70205", "2026-11-04", 16001 end
     _G.WOW_PROJECT_ID = 18
-    _G.issecretvalue = function(v) return false end
+    -- A secret value: anything done to it other than passing it along or asking issecretvalue raises
+    local function forbidden() error("attempt to use a secret value (execution tainted by 'Hearthlog')") end
+    M.SECRET = setmetatable({}, { __tostring = forbidden, __concat = forbidden, __lt = forbidden, __le = forbidden,
+        __index = forbidden, __add = forbidden, __sub = forbidden, __len = forbidden, __call = forbidden })
+    _G.issecretvalue = function(v) return rawequal(v, M.SECRET) end
     _G.C_Secrets = {}
     _G.UnitAura, _G.GetItemInfo, _G.IsEquippableItem, _G.GetTalentTabTnfo, _G.GetCoinTextureString = nil, nil, nil, nil, nil
     _G.GetSpellInfo = nil
@@ -149,13 +153,19 @@ function M.ForeverMode()
             if f then return { name = f.name, currentStanding = f.v, reaction = f.s, isHeader = false } end end,
     }
     _G.C_MountJournal = { GetMountInfoByID = function(id) return "Brown Kodo" end }
+    _G.C_TransmogCollection = { GetSourceInfo = function(id) return { name = "Frayed Robe", itemID = 2491 } end }
     _G.C_DeathRecap = { GetRecapEvents = function(id) return M.recaps[id] end }
     C_Item.GetItemLink = function(loc) return M.bags[loc.bag] and M.bags[loc.bag][loc.slot] end
     _G.C_AuctionHouse = {
         PostItem = function() end, PostCommodity = function() end,
-        StartCommoditiesPurchase = function() end, PlaceBid = function() end,
+        StartCommoditiesPurchase = function() end, ConfirmCommoditiesPurchase = function() end, PlaceBid = function() end,
     }
-    -- The built-in damage meter. M.meter[kind] = { { guid, name, total, me, spells = { { id, total, creature, overkill } } } }
+    -- The emote call moved; the old global still exists and passes the call along
+    C_ChatInfo.PerformEmote = function(token) end
+    _G.DoEmote = function(token) C_ChatInfo.PerformEmote(token) end
+    -- The built-in damage meter. M.meter[kind] = { { guid, creatureID, name, total, me,
+    --     spells = { { id, total, creature, overkill, unit, amount } } } }
+    -- Fields the meter leaves out arrive as "" and 0, as on the real client.
     _G.Enum = _G.Enum or {}
     Enum.DamageMeterSessionType = { Overall = 0, Current = 1, Expired = 2 }
     Enum.DamageMeterType = { DamageDone = 0, Dps = 1, HealingDone = 2, Hps = 3, Absorbs = 4, Interrupts = 5, Dispels = 6,
@@ -168,19 +178,23 @@ function M.ForeverMode()
             if not m then return { combatSources = {}, durationSeconds = 0, totalAmount = 0 } end
             local srcs = {}
             for _, s in ipairs(m[kind] or {}) do
-                tinsert(srcs, { sourceGUID = s.guid, name = s.name, totalAmount = s.total, isLocalPlayer = s.me or false,
-                    deathRecapID = s.recap, deathTimeSeconds = s.recap and 10 or nil })
+                local src = { sourceGUID = s.guid, sourceCreatureID = s.creatureID, name = s.name, totalAmount = s.total,
+                    isLocalPlayer = s.me or false, deathRecapID = s.recap, deathTimeSeconds = s.recap and 10 or nil }
+                for k, v in pairs(s.extra or {}) do src[k] = v end -- extra or overriding fields, M.SECRET among them
+                tinsert(srcs, src)
             end
             return { combatSources = srcs, durationSeconds = m.dur, totalAmount = 0 }
         end,
-        GetCombatSessionSourceFromType = function(st, kind, guid)
+        GetCombatSessionSourceFromType = function(st, kind, guid, creatureID)
             local m = M.meter
             if not m then return nil end
             for _, s in ipairs(m[kind] or {}) do
-                if s.guid == guid then
+                if (guid ~= nil and s.guid == guid) or (creatureID ~= nil and s.creatureID == creatureID) then
                     local spells = {}
                     for _, sp in ipairs(s.spells or {}) do
-                        tinsert(spells, { spellID = sp.id, totalAmount = sp.total, creatureName = sp.creature, overkillAmount = sp.overkill or 0 })
+                        tinsert(spells, { spellID = sp.id, totalAmount = sp.total, creatureName = sp.creature or "", overkillAmount = sp.overkill or 0,
+                            combatSpellDetails = { unitName = sp.unit or "", amount = sp.amount or 0, classification = "",
+                                unitClassFilename = "", isMob = false, isPet = false } })
                     end
                     return { combatSpells = spells, totalAmount = s.total }
                 end
@@ -222,6 +236,7 @@ _G.GetCoinTextureString = function(c) return tostring(c) .. "c" end
 _G.UnitClassification = function() return M.targetClass end
 _G.Ambiguate = function(n) return n end
 _G.JumpOrAscendStart = function() end
+_G.DoEmote = function(token) end
 _G.hooksecurefunc = function(a, b, c)
     local tbl, name, fn = _G, a, b
     if type(a) == "table" then tbl, name, fn = a, b, c end

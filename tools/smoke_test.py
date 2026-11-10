@@ -230,7 +230,9 @@ if M.forever then
     M.bags[0] = M.bags[0] or {}
     M.bags[0][3] = "|cffffffff|Hitem:2589::::::::1:::::|h[Linen Cloth]|h|r"
     C_AuctionHouse.PostCommodity({ bag = 0, slot = 3 }, 2, 20, 5)
-    C_AuctionHouse.StartCommoditiesPurchase(2318, 5)
+    C_AuctionHouse.StartCommoditiesPurchase(2318, 5) -- a price check, not a purchase
+    fire("COMMODITY_PRICE_UPDATED", 40, 200)
+    C_AuctionHouse.ConfirmCommoditiesPurchase(2318, 5)
     C_AuctionHouse.PlaceBid(123, 250)
     M.units.target = { name = "Stabbyjoe-Whitemane", guid = "Player-2-000077", hostile = true }
     M.targetGUID = "Player-2-000077"
@@ -336,7 +338,8 @@ UseAction(5)
 RepairAllItems()
 M.money = M.money - 37
 fire("PLAYER_MONEY")
-fire("CHAT_MSG_TEXT_EMOTE", "Zinther dances.", "Zinther")
+DoEmote("DANCE") -- /dance; in chat it reads "You burst into dance."
+fire("CHAT_MSG_TEXT_EMOTE", "You burst into dance.", "Zinther")
 fire("CHAT_MSG_SAY", "hello", "Zinther")
 fire("CHAT_MSG_SAY", "hi back", "Reidoo")
 
@@ -450,7 +453,7 @@ else:
     assert not [e for e in char.events.values() if e.k == "KILL" and e.n == "Bystander Boar"], "a mob we never tagged is not our kill"
     assert c.avoidableTaken == 60 and t.groupDeaths["Danwar"].n == 1 and "Zinther" not in t.groupDeaths, "avoidable damage and group deaths from the meter"
     assert c.mounts == 1 and [e for e in char.events.values() if e.k == "MOUNT"][0].n == "Brown Kodo", "mount learned"
-    assert c.ahPosted == 2 and t.ahPosted["Linen Cloth"].n == 60 and c.ahBuyouts == 2 and t.ahBought[2318].n == 15 and c.ahBids == 2 and c.ahSpent == 750, \
+    assert c.ahPosted == 2 and t.ahPosted["Linen Cloth"].n == 60 and c.ahBuyouts == 2 and t.ahBought[2318].n == 15 and c.ahBids == 2 and c.ahSpent == 950, \
         "modern auction house hooks (posted=%s buyouts=%s bids=%s spent=%s)" % (c.ahPosted, c.ahBuyouts, c.ahBids, c.ahSpent)
     assist = [e for e in char.events.values() if e.k == "KILL" and e.assist][0]
     assert assist.n == "Kobold Vermin" and assist.group == True and assist.xp == 20, "assist is the creature the meter saw us damage"
@@ -494,6 +497,7 @@ nudges = [l for l in M.printed.values() if "is out" in l]
 assert len(nudges) == 1, "version nudge should print exactly once"
 assert any(m.msg.startswith("V:") for m in M.sentAddon.values()), "no version announce sent"
 assert any(m.msg.startswith("A:") for m in M.sentAddon.values()), "no answer to Q sent"
+assert c.emotes == 1 and t["emotes"]["dance"].n == 1, "own emote should count once, under its command word (got %s)" % c.emotes
 assert t["used"][117].n == 1 and 1372 not in t["used"], "used filter broken"
 assert c.meals == 1 and c.foodSeconds == 18, "food tracking broken"
 assert t["gold"]["repair"].o == 37, "repair gold tally broken"

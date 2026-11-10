@@ -7,8 +7,9 @@ local ADDON_NAME, ns = ...
 -- read once combat ends (it is "secret" while the fight runs). This gives back most of what
 -- the combat log used to: your damage and healing by ability and by target, who hit you, who
 -- healed you and whom you healed, interrupts, dispels, absorbs, and every group member's
--- damage and healing per fight. Classic Era has no meter and no need for one.
-ns.HAS_METER = C_DamageMeter ~= nil and type(C_DamageMeter.GetCombatSessionFromType) == "function"
+-- damage and healing per fight. It is only read where the combat log is gone: a client that has
+-- both (the meter reached the Classic clients too) keeps using the log, or everything would count twice.
+ns.HAS_METER = ns.NO_CLEU == true and C_DamageMeter ~= nil and type(C_DamageMeter.GetCombatSessionFromType) == "function"
 ns.LOADED.Meter = true
 if not ns.HAS_METER then return end
 
@@ -21,7 +22,7 @@ local CURRENT = ST.Current or 1
 local T = {
     DamageDone = MT.DamageDone or 0, HealingDone = MT.HealingDone or 2, Absorbs = MT.Absorbs or 4,
     Interrupts = MT.Interrupts or 5, Dispels = MT.Dispels or 6, DamageTaken = MT.DamageTaken or 7,
-    Avoidable = MT.AvoidableDamageTaken or 8, Deaths = MT.Deaths or 9,
+    Avoidable = MT.AvoidableDamageTaken or 8, Deaths = MT.Deaths or 9, EnemyTaken = MT.EnemyDamageTaken or 10,
 }
 
 local function SpellName(id)
@@ -32,8 +33,18 @@ end
 local function Session(kind)
     return CallIn(C_DamageMeter, "GetCombatSessionFromType", CURRENT, kind)
 end
-local function Source(kind, guid)
-    return CallIn(C_DamageMeter, "GetCombatSessionSourceFromType", CURRENT, kind, guid)
+local function Source(kind, guid, creatureID)
+    return CallIn(C_DamageMeter, "GetCombatSessionSourceFromType", CURRENT, kind, guid, creatureID)
+end
+-- Who a per-ability row is about. Depending on the view the meter puts that in creatureName or in the
+-- row's unit details, and for your own damage done it gives neither.
+local function RowUnit(sp)
+    local n = Str(sp.creatureName)
+    if n and n ~= "" then return n end
+    local d = ns.Tbl(sp.combatSpellDetails)
+    n = d and Str(d.unitName)
+    if n and n ~= "" then return n end
+    return nil
 end
 
 -- Adds amount to a tally record's d field; returns false if the amount was secret
@@ -84,7 +95,7 @@ local function Plain(roster, name, guid)
     for _, n in ipairs(roster.names) do
         if padded:find(" " .. n .. " ", 1, true) then return n end
     end
-    return short
+    return ns.PlayerName(short) -- not in the group any more: still filed under the first name
 end
 
 -- Returns true when done (data read, or nothing to read), false to retry (still secret)
@@ -147,19 +158,51 @@ local function ReadFight(fightEvent, fightDur)
     -- My damage by ability and by target
     local mine = meGUID and Source(T.DamageDone, meGUID)
     mine = ns.Tbl(mine)
+    local gotTargets = false
     if mine and ns.Tbl(mine.combatSpells) then
         for _, sp in ipairs(mine.combatSpells) do
             local id = Num(sp.spellID)
             local amt = Num(sp.totalAmount)
-            local target = Str(sp.creatureName)
+            local target = RowUnit(sp)
             if id and amt then
                 AddD("damageBySpell", id, SpellName(id), amt)
-                if target and target ~= "" then
+                if target then
+                    gotTargets = true
                     AddD("damageTo", target, target, amt)
                     if ns.Engaged then ns.Engaged(target) end
                 end
                 local over = Num(sp.overkillAmount)
                 if over and over > 0 then Count("overkill", over) end
+            end
+        end
+    end
+
+    -- Who took that damage, when the rows above did not say. The meter's "enemy damage taken" view has one
+    -- source per enemy. Alone, what an enemy took is what we dealt; in a group each enemy is broken down
+    -- by who hit it and only our part is kept.
+    if not gotTargets and myDamage > 0 then
+        local foes = ns.Tbl(Session(T.EnemyTaken))
+        for _, src in ipairs(foes and ns.Tbl(foes.combatSources) or {}) do
+            local foe, total = Str(src.name), Num(src.totalAmount)
+            if foe and foe ~= "" and total and total > 0 then
+                local part = nil
+                if #sources == 1 and not IsInGroup() then
+                    part = total
+                else
+                    local det = ns.Tbl(Source(T.EnemyTaken, Str(src.sourceGUID), Num(src.sourceCreatureID)))
+                    for _, sp in ipairs(det and ns.Tbl(det.combatSpells) or {}) do
+                        local d = ns.Tbl(sp.combatSpellDetails)
+                        if d and Plain(roster, Str(d.unitName)) == myName then
+                            local amt = Num(d.amount)
+                            if not amt or amt <= 0 then amt = Num(sp.totalAmount) end
+                            if amt then part = (part or 0) + amt end
+                        end
+                    end
+                end
+                if part and part > 0 then
+                    AddD("damageTo", foe, foe, math.min(part, myDamage))
+                    if ns.Engaged then ns.Engaged(foe) end
+                end
             end
         end
     end
@@ -179,7 +222,7 @@ local function ReadFight(fightEvent, fightDur)
                 local det = ns.Tbl(guid and Source(T.HealingDone, guid))
                 if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
-                        local id, amt, target = Num(sp.spellID), Num(sp.totalAmount), Plain(roster, Str(sp.creatureName))
+                        local id, amt, target = Num(sp.spellID), Num(sp.totalAmount), Plain(roster, RowUnit(sp))
                         if id and amt then
                             AddD("healBySpell", id, SpellName(id), amt)
                             if target and target ~= "" and target ~= myName then AddD("healedTo", target, target, amt) end
@@ -193,7 +236,7 @@ local function ReadFight(fightEvent, fightDur)
                 local det = ns.Tbl(guid and Source(T.HealingDone, guid))
                 if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
-                        local amt, target = Num(sp.totalAmount), Plain(roster, Str(sp.creatureName))
+                        local amt, target = Num(sp.totalAmount), Plain(roster, RowUnit(sp))
                         if amt and target and myName and target == myName then
                             AddD("healedBy", name, name, amt)
                             -- Without per-hit events, the meter is the only source for healing received
@@ -220,8 +263,8 @@ local function ReadFight(fightEvent, fightDur)
                 local det = ns.Tbl(guid and Source(T.DamageTaken, guid))
                 if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
-                        local amt, who = Num(sp.totalAmount), Str(sp.creatureName)
-                        if amt and who and who ~= "" then AddD("hurtBy", who, who, amt) end
+                        local amt, who = Num(sp.totalAmount), RowUnit(sp)
+                        if amt and who then AddD("hurtBy", who, who, amt) end
                     end
                 end
             end
@@ -298,36 +341,53 @@ function ns.MyDeathRecapID()
     end
 end
 
--- /hl meter: what the game's meter holds right now, field by field, for the person reading the screenshot
+-- /hl meter: what the game's meter holds right now, field by field, for the person reading the screenshot.
+-- Some fields stay secret after the fight. A secret may not be compared, sorted or joined to other text,
+-- so each one is named and shown as SECRET without being touched.
+local function Shape(t)
+    local rows = {}
+    for k, v in pairs(t) do
+        local text
+        if ns.IsSecret(v) then text = "SECRET"
+        elseif type(v) == "table" then text = "{..}"
+        else text = tostring(v) end
+        rows[#rows + 1] = { key = tostring(k), text = text }
+    end
+    table.sort(rows, function(x, y) return x.key < y.key end)
+    local parts = {}
+    for i, r in ipairs(rows) do parts[i] = r.key .. "=" .. r.text end
+    return table.concat(parts, " ")
+end
 function ns.MeterDump()
     local P = ns.Print
-    local ok, avail, why = pcall(function() return CallIn(C_DamageMeter, "IsDamageMeterAvailable") end)
+    local _, avail, why = pcall(function() return CallIn(C_DamageMeter, "IsDamageMeterAvailable") end)
     P(string.format("meter available: %s %s", tostring(avail), tostring(why or "")))
-    local s = Session(T.DamageDone)
-    if type(s) ~= "table" then P("no DamageDone session: " .. tostring(s)) return end
-    P(string.format("DamageDone: %d sources, duration %s, total %s", type(s.combatSources) == "table" and #s.combatSources or -1,
-        tostring(s.durationSeconds), tostring(s.totalAmount)))
-    for i, src in ipairs(s.combatSources or {}) do
-        local secret = (type(issecretvalue) == "function" and issecretvalue(src.totalAmount)) and " (secret)" or ""
-        P(string.format("  %d: name=%s local=%s total=%s%s max=%s guid=%s", i, tostring(src.name), tostring(src.isLocalPlayer), tostring(src.totalAmount), secret, tostring(src.maxAmount), tostring(src.sourceGUID)))
-        local det = Source(T.DamageDone, Str(src.sourceGUID) or Str(UnitGUID("player")))
-        if type(det) == "table" and type(det.combatSpells) == "table" then
-            for j, sp in ipairs(det.combatSpells) do
-                if j > 4 then break end
-                P(string.format("     spell %s %s on %s", tostring(sp.spellID), tostring(sp.totalAmount), tostring(sp.creatureName)))
+    -- One source and one row of each view, with every field: this is how their layout is learned. Each view
+    -- is on its own, so one that cannot be read does not hide the others.
+    local views = { { "DamageDone", T.DamageDone }, { "DamageTaken", T.DamageTaken }, { "HealingDone", T.HealingDone },
+        { "EnemyDamageTaken", T.EnemyTaken } }
+    for _, v in ipairs(views) do
+        local ok, err = pcall(function()
+            local ses = ns.Tbl(Session(v[2]))
+            local srcs = ses and ns.Tbl(ses.combatSources)
+            if not srcs then P(v[1] .. ": no session") return end
+            P(string.format("%s: %d sources, duration %s", v[1], #srcs, ns.IsSecret(ses.durationSeconds) and "SECRET" or tostring(ses.durationSeconds)))
+            for i, src in ipairs(srcs) do
+                if i > 2 then break end
+                P(string.format("  %d: %s", i, Shape(src)))
+                local det = ns.Tbl(Source(v[2], Str(src.sourceGUID) or (src.isLocalPlayer == true and Str(UnitGUID("player")) or nil), Num(src.sourceCreatureID)))
+                local rows = det and ns.Tbl(det.combatSpells) or {}
+                local sp = ns.Tbl(rows[1])
+                if sp then
+                    P(string.format("     row 1 of %d: %s", #rows, Shape(sp)))
+                    local d = ns.Tbl(sp.combatSpellDetails)
+                    if d then P("     details: " .. Shape(d)) end
+                else
+                    P("     no rows")
+                end
             end
-        else
-            P("     per-spell: " .. tostring(det))
-        end
-    end
-    local heal = ns.Tbl(Session(T.HealingDone))
-    for i, src in ipairs(heal and ns.Tbl(heal.combatSources) or {}) do
-        P(string.format("  heal %d: name=%s total=%s", i, tostring(src.name), tostring(src.totalAmount)))
-        local det = ns.Tbl(Source(T.HealingDone, Str(src.sourceGUID) or Str(UnitGUID("player"))))
-        for j, sp in ipairs(det and ns.Tbl(det.combatSpells) or {}) do
-            if j > 3 then break end
-            P(string.format("     spell %s %s on %s", tostring(sp.spellID), tostring(sp.totalAmount), tostring(sp.creatureName)))
-        end
+        end)
+        if not ok then P(v[1] .. " could not be printed: " .. tostring(err)) end
     end
     P(string.format("session id=%s lastKey=%s attempts=%d fights read=%d of %d", tostring(sessionID), tostring(lastKey), attempts,
         ns.char and ns.char.counters.meterFights or 0, ns.char and ns.char.counters.fights or 0))

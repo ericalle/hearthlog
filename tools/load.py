@@ -103,6 +103,8 @@ def _unpack_samples(char_key, session_index, session, chunks, maps):
     t = session.get("t0")
     hidden = False
     teleport_next = False
+    idle = 0
+    started = False
     order = 0
     for chunk in chunks:
         for s in chunk.split(";"):
@@ -110,12 +112,17 @@ def _unpack_samples(char_key, session_index, session, chunks, maps):
                 continue
             head = s.split(",")[0]
             if head == "P":
-                t = (t or 0) + int(s.split(",")[1])
+                # Stood still this long before the next sample. That sample's dt is the time since the
+                # previous sample, so it already spans the pause and the clock is not moved here. The one
+                # exception is a pause before the first sample of a session, whose dt is 0.
+                idle = int(s.split(",")[1])
+                if not started:
+                    t = (t or 0) + idle
                 continue
             if head == "X":
                 hidden = True
                 rows.append(dict(char=char_key, session=session_index, order=order, t=t, hidden=True,
-                                 map=None, x=None, y=None, mode=None, teleport=False, east=None, north=None))
+                                 map=None, x=None, y=None, mode=None, teleport=False, east=None, north=None, idle=0))
                 order += 1
                 continue
             if head == "T":
@@ -134,8 +141,11 @@ def _unpack_samples(char_key, session_index, session, chunks, maps):
                 east = m["l"] + (m["r"] - m["l"]) * x
                 north = m["t"] + (m["b"] - m["t"]) * y
             rows.append(dict(char=char_key, session=session_index, order=order, t=t, hidden=False,
-                             map=map_id, x=x, y=y, mode=mode, teleport=teleport_next, east=east, north=north))
+                             map=map_id, x=x, y=y, mode=mode, teleport=teleport_next, east=east, north=north,
+                             idle=idle))
             teleport_next = False
+            idle = 0
+            started = True
             hidden = False
             order += 1
     return rows

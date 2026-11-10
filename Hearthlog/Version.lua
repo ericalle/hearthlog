@@ -35,19 +35,25 @@ local function Send(message, channel)
     pcall(C_ChatInfo.SendAddonMessage, PREFIX, message, channel)
 end
 
-local function Announce(message)
-    if IsInGuild() then Send(message, "GUILD") end
-    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then Send(message, "INSTANCE_CHAT")
-    elseif IsInRaid() then Send(message, "RAID")
-    elseif IsInGroup() then Send(message, "PARTY") end
+local function GroupChannel()
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then return "INSTANCE_CHAT" end
+    if IsInRaid() then return "RAID" end
+    if IsInGroup() then return "PARTY" end
+end
+local function Announce(message, groupOnly)
+    if not groupOnly and IsInGuild() then Send(message, "GUILD") end
+    local channel = GroupChannel()
+    if channel then Send(message, channel) end
 end
 
-local function OnMessage(message, sender)
+local ANSWERABLE = { GUILD = true, PARTY = true, RAID = true, INSTANCE_CHAT = true }
+local function OnMessage(message, sender, channel)
     local name = ns.PlayerName(sender and (Ambiguate and Ambiguate(sender, "short") or sender))
     if not name or name == UnitName("player") then return end
     local kind, version = message:match("^(%a):?(.*)$")
     if kind == "Q" then
-        Announce("A:" .. ns.VERSION)
+        -- Answer where the question was asked, not everywhere
+        if ANSWERABLE[channel] then Send("A:" .. ns.VERSION, channel) else Announce("A:" .. ns.VERSION) end
         return
     end
     if (kind == "V" or kind == "A") and version ~= "" then
@@ -88,12 +94,25 @@ ns.On("PLAYER_LOGIN", function()
     ns.After(10, function() Announce("V:" .. ns.VERSION) end)
 end)
 
+-- The roster event fires for every change in a group (joins, leaves, role and subgroup moves, people
+-- going offline), which in a raid is constant. The version goes to the group only when the group has
+-- grown, and then at most once every 30 seconds. The guild hears it once, at login.
+local groupSize, lastGroupSend, sendDue = 0, 0, false
 ns.On("GROUP_ROSTER_UPDATE", function()
-    if IsInGroup() then ns.After(2, function() Announce("V:" .. ns.VERSION) end) end
+    local size = IsInGroup() and (tonumber(GetNumGroupMembers()) or 0) or 0
+    local grew = size > groupSize
+    groupSize = size
+    if not grew or sendDue then return end
+    sendDue = true
+    ns.After(math.max(2, 30 - (ns.Now() - lastGroupSend)), function()
+        sendDue = false
+        lastGroupSend = ns.Now()
+        Announce("V:" .. ns.VERSION, true)
+    end)
 end)
 
-ns.On("CHAT_MSG_ADDON", function(prefix, message, _, sender)
-    if prefix == PREFIX and type(message) == "string" then OnMessage(message, sender) end
+ns.On("CHAT_MSG_ADDON", function(prefix, message, channel, sender)
+    if prefix == PREFIX and type(message) == "string" then OnMessage(message, sender, channel) end
 end)
 
 ns.LOADED.Version = true

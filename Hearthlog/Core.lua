@@ -155,11 +155,37 @@ local function InitChar()
                 end
             end
         end
+        -- Before 0.3.14 roll lines were read with the fields shifted: item links and history ids ended up
+        -- as "players". Those entries go before anything is folded.
+        for key in pairs(char.tallies.rolls) do
+            if type(key) == "string" and (key:find("|", 1, true) or key:match("^%d+$")) then char.tallies.rolls[key] = nil end
+        end
         for _, group in ipairs({ "whispers", "mailTo", "groupDmg", "groupHeal", "groupDeaths", "healedBy", "rolls" }) do Fold(group) end
         Fold("healedTo", me) -- your own heals on yourself were listed there under your full name
-        for key in pairs(char.tallies.rolls) do
-            if type(key) == "string" and key:match("^%d+$") then char.tallies.rolls[key] = nil end
+    end
+    -- One pass over the log, once: WON entries named with a history id lose that name, and the guild
+    -- "joined" entry that every login repeated is kept only where the guild actually changed.
+    char.meta = char.meta or {}
+    -- "read" is the game's own emote for opening the map and was counted by a test build
+    local readEmote = char.tallies.emotes and char.tallies.emotes.read
+    if readEmote then
+        char.counters.emotes = math.max(0, (char.counters.emotes or 0) - (readEmote.n or 0))
+        char.tallies.emotes.read = nil
+    end
+    if (char.meta.cleaned or 0) < 15 then
+        local kept, lastGuild = {}, 0
+        for _, e in ipairs(char.events) do
+            local keep = true
+            if e.k == "WON" and type(e.n) == "string" and e.n:match("^%d+$") then e.n = nil end
+            if e.k == "GUILD" then
+                keep = (e.n or false) ~= lastGuild
+                lastGuild = e.n or false
+            end
+            if keep then kept[#kept + 1] = e end
         end
+        char.events = kept
+        if lastGuild ~= 0 and char.meta.guild == nil then char.meta.guild = lastGuild end
+        char.meta.cleaned = 15
     end
     if ns.db.settings and ns.db.settings.ui ~= "b" then ns.db.settings.ui = "b" end
     -- Spells the game casts on its own (login effect, auto attack) are not casts; drop any already tallied
@@ -435,6 +461,8 @@ SlashCmdList.HEARTHLOG = function(msg)
         Print(string.format("scriptErrors cvar: %s (set to 1 and /reload to see load errors)", tostring(GetCVar and GetCVar("scriptErrors"))))
     elseif cmd == "meter" then
         if ns.MeterDump then ns.MeterDump() else Print("no damage meter on this client") end
+    elseif cmd == "talents" then
+        if ns.TalentDump then ns.TalentDump() end
     elseif cmd == "debug" then
         ns.debug = not ns.debug
         Print("debug " .. (ns.debug and "on" or "off"))

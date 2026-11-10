@@ -1,5 +1,40 @@
 # Hearthlog changelog
 
+## 0.3.15
+Found by reading a real Forever data file after five days of play.
+- Before 0.3.14, roll lines on Forever were read with the fields shifted, which left item links and history
+  ids in the roll list as if they were players. They are removed at login, before names are folded.
+- The log repeated "joined guild" on most logins. The guild is remembered between sessions now, and the
+  repeats already in the log are removed once, along with roll wins that were named by a history id.
+- New appearances are named from the collection itself. The chat line never matched (0 of 178 had a name).
+- People who left the group before a fight was read are still filed under their first name.
+- Forever: kills are named from the game's own kill event, which says who landed the blow and on which mob.
+  Until now the name came from whatever you had targeted, so in a group about a quarter of kills had no
+  name at all (197 of 751). Mobs are remembered from targets, mouseover and nameplates so the event can be
+  turned into a name, and a mob never looked at is named from another of its kind.
+- Forever: your own killing blow in a group is a kill again and a party member's is an assist, the way it
+  works on Classic Era. A killing blow that gives no XP (a gray mob) counts without having to be targeted.
+- Emotes were never counted, on any client. Your own emote arrives in chat as "You burst into dance.",
+  which has no name in it to match. The emote call itself is counted now, under its command word. "read"
+  is left out, because the game performs it for you when you open the map.
+- Forever: the meter gives no target for your own damage. "Most damaged" is read from its enemy view
+  instead, and "Hurt most by" from a second field the meter has for names. Both work now. "Healed you"
+  and "you healed" are still empty: the meter's healing rows do not say who was healed, at least for a
+  heal on yourself. `/hl meter` prints one row of each view with every field, and fields the game keeps
+  secret after the fight are shown as SECRET.
+- Talents on Forever and Retail (the old talent functions do not exist there): each point spent is logged,
+  and a level-up carries the whole build by name. `/hl talents` shows which talent functions the client
+  has and what they return.
+- Auction house: buying a stackable item was counted when the price was requested, bought or not. It is
+  counted on confirmation now, with what it cost.
+- The version message to the group went out on every roster change, which in a raid is constant, and to
+  the guild each time as well. The group hears it when it grows, at most once every 30 seconds, and the
+  guild once at login. A `/hl who` asked in party chat is answered in party chat only.
+- The game's meter has reached the Classic clients too. It is only read where the combat log is gone, so
+  a client with both does not count everything twice.
+- `tools/load.py` added each standing-still pause to the clock twice, which pushed every later point of a
+  session late. Each row now also says how long you stood still before it (`idle`).
+
 ## 0.3.14
 - The right-hand pane is laid out in two real columns: the count, date or time on the left, the text on the
   right, wrapping under itself. Numbers of different lengths no longer push the text around.

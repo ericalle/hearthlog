@@ -5,51 +5,90 @@ local ADDON_NAME, ns = ...
 -- =========================================================
 -- These clients give addons no COMBAT_LOG_EVENT_UNFILTERED, so the combat side is rebuilt
 -- from what is still allowed, with less detail:
---   kills        from XP gains in or right after combat, named from your last hostile target (gray mobs give no XP)
+--   kills        from XP gains in or right after combat, named from PARTY_KILL (who landed the blow, on which mob)
+--                or failing that from your last hostile target (gray mobs give no XP)
 --   damage taken, healing received, crits taken  from UNIT_COMBAT on the player
 --   damage done  from UNIT_COMBAT on your target, only while solo (the event does not say who hit it)
 --   deaths       the killer is your current target at the moment you die, marked as a guess
 --   pvp kills    from the honorable-kill counter, named from your last hostile player target
 --   buffs        from the aura list, for group members only (strangers cannot be named)
--- Killing blows vs assists, who healed whom, world damage and pet stats are not available here.
+-- World damage and pet stats are not available here.
 ns.LOADED.Modern = true
 if not ns.NO_CLEU then return end
 
 local Count, Event, Now, Call, Short, Pat = ns.Count, ns.Event, ns.Now, ns.Call, ns.ShortName, ns.Pat
 
 -- Kills. The experience chat line is hidden from addons here (it arrives as a KString), so a kill
--- is an XP gain during combat or just after it, and the mob is the hostile thing you last had targeted.
-local lastHostile = nil -- { n, lvl, npc, elite, rare, t }
-local function NoteHostileTarget()
-    if not (UnitExists and UnitExists("target")) then return end
-    if not UnitCanAttack("player", "target") or UnitIsPlayer("target") then return end
-    local name = ns.Str(UnitName("target"))
-    if not name then return end
-    local h = { n = name, t = Now() }
-    local lvl = ns.Num(UnitLevel("target"))
-    if lvl and lvl > 0 then h.lvl = lvl end
-    local guid = ns.Str(UnitGUID("target"))
-    if guid then h.npc = ns.NpcId(guid); h.guid = guid end
-    if UnitThreatSituation then
-        -- On its threat list means we have tagged it (or it has us). Once seen it sticks for that mob:
-        -- the list empties the moment it dies, which can be just before UNIT_DIED arrives.
-        local th = ns.Num(ns.Call("UnitThreatSituation", "player", "target"))
-        h.threat = th ~= nil or (lastHostile ~= nil and lastHostile.guid == guid and lastHostile.threat == true)
+-- is an XP gain during combat or just after it. Which mob it was comes from PARTY_KILL when that fired
+-- (the game's own "you or someone in your party landed the killing blow", by GUID), and otherwise from
+-- the hostile thing you last had targeted.
+
+-- The kill events carry a GUID and nothing else, so every hostile creature we get a look at (target,
+-- mouseover, nameplate) is remembered by GUID, and its name by creature id for others of its kind.
+local seen, seenN = {}, 0 -- [guid] = { guid, npc, n, lvl, elite, rare, threat, blowT, t }
+local npcNames = {}       -- [creature id] = name
+local lastHostile = nil   -- the record of the hostile creature last targeted
+local function Yes(v) return v ~= nil and not ns.IsSecret(v) and v and true or false end
+local function See(unit)
+    if not (UnitExists and Yes(UnitExists(unit))) then return nil end
+    if not Yes(UnitCanAttack("player", unit)) or Yes(UnitIsPlayer(unit)) then return nil end
+    local name, guid = ns.Str(UnitName(unit)), ns.Str(UnitGUID(unit))
+    if not name or not guid then return nil end
+    local h = seen[guid]
+    if not h then
+        if seenN >= 300 then seen, seenN = {}, 0 end
+        h = (lastHostile and lastHostile.guid == guid) and lastHostile or { guid = guid, npc = ns.NpcId(guid) }
+        seen[guid], seenN = h, seenN + 1
     end
-    local cls = ns.Str(UnitClassification("target"))
-    if cls == "elite" or cls == "worldboss" or cls == "rareelite" then h.elite = true end
-    if cls == "rare" or cls == "rareelite" then h.rare = true end
+    h.n, h.t = name, Now()
+    if h.npc then npcNames[h.npc] = name end
+    local lvl = ns.Num(UnitLevel(unit))
+    if lvl and lvl > 0 then h.lvl = lvl end
+    local cls = ns.Str(UnitClassification(unit))
+    h.elite = (cls == "elite" or cls == "worldboss" or cls == "rareelite") or nil
+    h.rare = (cls == "rare" or cls == "rareelite") or nil
+    return h
+end
+-- The record for a GUID, seen or not. An unseen creature is named from others of its kind, then from
+-- the game's own tooltip for it; failing both it still carries its creature id.
+local function Known(guid)
+    local h = seen[guid]
+    if h then return h end
+    if lastHostile and lastHostile.guid == guid then return lastHostile end
+    h = { guid = guid, npc = ns.NpcId(guid) }
+    h.n = h.npc and npcNames[h.npc] or nil
+    if not h.n and C_TooltipInfo and C_TooltipInfo.GetHyperlink then
+        local data = ns.Tbl(ns.CallIn(C_TooltipInfo, "GetHyperlink", "unit:" .. guid))
+        local line = data and ns.Tbl(data.lines) and ns.Tbl(data.lines[1])
+        local name = line and ns.Str(line.leftText)
+        if name and name ~= "" then h.n = name end
+    end
+    return h
+end
+
+local function NoteHostileTarget()
+    local h = See("target")
+    if not h then return end
+    -- On its threat list means we have tagged it (or it has us). Once seen it sticks for that mob:
+    -- the list empties the moment it dies, which can be just before UNIT_DIED arrives.
+    if UnitThreatSituation and ns.Num(ns.Call("UnitThreatSituation", "player", "target")) ~= nil then h.threat = true end
     lastHostile = h
 end
 ns.On("PLAYER_TARGET_CHANGED", NoteHostileTarget)
 ns.On("UNIT_TARGET", function(unit) if unit == "player" then NoteHostileTarget() end end)
 ns.On("UNIT_THREAT_LIST_UPDATE", function(unit) if unit == "player" or unit == "target" then NoteHostileTarget() end end)
+ns.On("UPDATE_MOUSEOVER_UNIT", function() See("mouseover") end)
+ns.On("NAME_PLATE_UNIT_ADDED", function(unit)
+    unit = ns.Str(unit)
+    if unit then See(unit) end
+end)
 
 -- UNIT_DIED carries the GUID of whatever just died nearby. When it is the mob we had targeted, the kill is
 -- confirmed on the spot; the XP gain (if any) that follows names it from here. A tagged mob that gives no
 -- XP (gray) is still a kill.
 local deadTarget = nil
 local lastXPKillT = 0
+local lastXPKill = nil -- the last kill taken from an XP gain: { e = its event, t, matched = a killing blow went with it }
 local function GrayKillCheck(stamp)
     if not deadTarget or deadTarget.t ~= stamp then return end -- consumed by the XP path
     local d = deadTarget
@@ -65,27 +104,74 @@ ns.On("UNIT_DIED", function(arg)
     local guid = ns.Str(arg)
     local h = lastHostile
     if not guid or not h or h.guid ~= guid then return end
+    if h.blowT and Now() - h.blowT <= 3 then return end -- PARTY_KILL has this one already
     if Now() - lastXPKillT <= 2 then return end -- its XP already arrived and was counted
     local stamp = Now()
-    deadTarget = { n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, threat = h.threat, t = stamp }
+    deadTarget = { guid = guid, n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, threat = h.threat, t = stamp }
     ns.After(1.5, function() GrayKillCheck(stamp) end)
+end)
+
+-- PARTY_KILL: attackerGUID, targetGUID. Each one waits here for the XP gain that belongs to it. A blow
+-- that gets no XP within two seconds is a gray mob: a kill when the blow was ours, an assist when it was
+-- a party member's and the mob had us on its threat list.
+local blows = {} -- oldest first: { guid, mine }
+local function GrayBlow(b)
+    for i, q in ipairs(blows) do
+        if q == b then
+            table.remove(blows, i)
+            local h = Known(b.guid)
+            if not (b.mine or h.threat) then return end
+            local e = { n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, xp = 0, gray = true }
+            if IsInGroup() then e.group = true end
+            if b.mine then Count("kills") else e.assist = true; Count("assists") end
+            Count("grayKills")
+            ns.NoteKill(e)
+            return
+        end
+    end
+end
+ns.On("PARTY_KILL", function(attacker, target)
+    attacker, target = ns.Str(attacker), ns.Str(target)
+    if not target or not ns.NpcId(target) then return end -- players are counted from the honor counter below
+    local h = Known(target)
+    h.blowT = Now()
+    if deadTarget and deadTarget.guid == target then deadTarget = nil end
+    -- Should the XP ever arrive first, that gain was already taken as a kill and named from the target.
+    -- This blow is that kill, not a second one.
+    local x = lastXPKill
+    if x and x.e and not x.matched and Now() - x.t <= 2 then
+        x.matched = true
+        if not x.e.n then x.e.n, x.e.lvl, x.e.npc, x.e.elite, x.e.rare = h.n, h.lvl, h.npc, h.elite, h.rare end
+        return
+    end
+    local mine = attacker ~= nil and (attacker == ns.Str(UnitGUID("player")) or attacker == ns.Str(UnitGUID("pet")))
+    local b = { guid = target, mine = mine }
+    tinsert(blows, b)
+    ns.After(2, function() GrayBlow(b) end)
 end)
 
 -- Called by the XP handler when a gain is not a quest or a discovery. Returns true if it was taken as a kill.
 function ns.KillFromXP(gain)
-    local inCombat = ns.InCombat() or ns.SinceCombat() <= 4
-    if not inCombat then return false end
-    local h = deadTarget or lastHostile
-    deadTarget = nil
+    local b = table.remove(blows, 1)
+    if not b and not (ns.InCombat() or ns.SinceCombat() <= 4) then return false end
+    local h
+    if b then
+        h = Known(b.guid)
+    else
+        h = deadTarget or lastHostile
+        deadTarget = nil
+        if h and Now() - h.t > 60 then h = nil end
+    end
     lastXPKillT = Now()
     local e = { xp = gain }
-    if h and Now() - h.t <= 60 then
-        e.n, e.lvl, e.npc, e.elite, e.rare = h.n, h.lvl, h.npc, h.elite, h.rare
-    end
-    if IsInGroup() then
-        e.group = true
-        -- Grouped: an assist when the meter saw you damage this mob, or you are in the fight yourself
-        if (e.n and ns.EngagedRecently(e.n)) or ns.InCombat() then
+    if h then e.n, e.lvl, e.npc, e.elite, e.rare = h.n, h.lvl, h.npc, h.elite, h.rare end
+    if IsInGroup() then e.group = true end
+    if b and b.mine then
+        Count("kills") -- our own killing blow, grouped or not
+    elseif IsInGroup() then
+        -- A party member's kill (or one with no blow reported): an assist when it had us on its threat
+        -- list, the meter saw us damage it, or we are in the fight ourselves
+        if (b and h.threat) or (e.n and ns.EngagedRecently(e.n)) or ns.InCombat() then
             e.assist = true
             Count("assists")
         else
@@ -95,7 +181,7 @@ function ns.KillFromXP(gain)
     else
         Count("kills")
     end
-    ns.NoteKill(e)
+    lastXPKill = { e = ns.NoteKill(e), t = Now(), matched = b ~= nil }
     return true
 end
 
