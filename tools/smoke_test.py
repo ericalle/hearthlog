@@ -207,7 +207,7 @@ if M.forever then
     fire("PLAYER_REGEN_ENABLED")
     M.Advance(3)
     -- A gray mob we tagged: it dies, no XP follows, still a kill
-    M.units.target = { name = "Gray Rat", guid = "Creature-0-1-0-1-4075-0030", hostile = true, threat = 1 }
+    M.units.target = { name = "Gray Rat", guid = "Creature-0-1-0-1-4075-0030", hostile = true, threat = 1, trivial = true }
     M.targetGUID = "Creature-0-1-0-1-4075-0030"
     fire("PLAYER_TARGET_CHANGED")
     fire("PLAYER_REGEN_DISABLED")

@@ -130,9 +130,13 @@ assert tuple(folded) == (88314120, None, "Krek", None, None, 16), tuple(folded)
 # ---- 0.3.15 ----
 KILLS = """
 local ME, DAN = "Player-1-000001", "Player-1-000002"
-local function mob(unit, name, id, n) M.units[unit] = { name = name, guid = "Creature-0-1-0-1-" .. id .. "-000" .. n, hostile = true }; return M.units[unit].guid end
-local function plate(unit, name, id, n) local g = mob(unit, name, id, n); M.Fire("NAME_PLATE_UNIT_ADDED", unit); return g end
-local function target(name, id, n) local g = mob("target", name, id, n); M.targetGUID = g; M.Fire("PLAYER_TARGET_CHANGED"); return g end
+local function mob(unit, name, id, n, more)
+    M.units[unit] = { name = name, guid = "Creature-0-1-0-1-" .. id .. "-000" .. n, hostile = true }
+    for k, v in pairs(more or {}) do M.units[unit][k] = v end
+    return M.units[unit].guid
+end
+local function plate(unit, name, id, n, more) local g = mob(unit, name, id, n, more); M.Fire("NAME_PLATE_UNIT_ADDED", unit); return g end
+local function target(name, id, n, more) local g = mob("target", name, id, n, more); M.targetGUID = g; M.Fire("PLAYER_TARGET_CHANGED"); return g end
 local function xp(v) M.xp = M.xp + v; M.Fire("PLAYER_XP_UPDATE") end
 local function kills() local out = {} for _, e in ipairs(ns.char.events) do if e.k == "KILL" then out[#out + 1] = e end end return out end
 local c = ns.char.counters
@@ -165,16 +169,36 @@ assert (mine, assists, first, second, assist_flag) == (1, 1, "Rotting Dead", "Ra
 # Forever: a killing blow with no XP (a gray mob) is one kill, whichever of the two death events comes first,
 # and a party member's blow on a mob we never touched is nothing
 n_kills, gray, n_events = run(True, KILLS + '''
-local a = target("Young Scavenger", 1508, 1)
+local a = target("Young Scavenger", 1508, 1, { trivial = true })
 M.Fire("PLAYER_REGEN_DISABLED")
 M.Fire("UNIT_DIED", a); M.Fire("PARTY_KILL", ME, a); M.Advance(5)
-local b = target("Young Scavenger", 1508, 2)
+local b = target("Young Scavenger", 1508, 2, { trivial = true })
 M.Fire("PARTY_KILL", ME, b); M.Fire("UNIT_DIED", b); M.Advance(5)
 M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = DAN }
 local x = plate("nameplate1", "Duskbat", 1512, 3)
 M.Fire("PARTY_KILL", DAN, x); M.Advance(5)
 return c.kills, c.grayKills, #kills()''')
 assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
+
+# ---- 0.3.16 ----
+# Forever: no XP is not the same as gray. A mob someone else tagged and anything killed at the level cap count
+# as kills without the gray mark; a mob the game calls trivial has it.
+GRAY = KILLS + '''
+M.level = LEVEL
+M.Fire("PLAYER_REGEN_DISABLED")
+local function blow(name, id, n, more) local g = plate("nameplate" .. n, name, id, n, more); M.Fire("PARTY_KILL", ME, g); M.Advance(4) end
+blow("Rot Hide Brute", 1939, 1, { level = HIGH })
+blow("Worg", 1765, 2, { level = LOW, trivial = true })
+local marks = {}
+for _, e in ipairs(kills()) do marks[#marks + 1] = e.gray and "gray" or "plain" end
+return c.kills, c.grayKills, table.concat(marks, ",")'''
+for level, high, low in ((20, 17, 10), (60, 58, 40)):
+    code = GRAY.replace("LEVEL", str(level)).replace("HIGH", str(high)).replace("LOW", str(low))
+    assert tuple(run(True, code)) == (2, 1, "plain,gray"), (level, tuple(run(True, code)))
+# The same from levels alone, on a client that cannot be asked: 13 and below is gray at 20, 51 and below at 60
+for level, high, low in ((20, 14, 13), (60, 52, 51)):
+    code = GRAY.replace("LEVEL", str(level)).replace("HIGH", str(high)).replace("LOW", str(low)).replace(", trivial = true", "")
+    assert tuple(run(True, code, pre="_G.UnitIsTrivial = nil")) == (2, 1, "plain,gray"), (level, tuple(run(True, code, pre="_G.UnitIsTrivial = nil")))
 
 # Forever: a mob never looked at is named from another of its kind, or from the game's tooltip for it
 by_kind, by_tip, no_blow = run(True, KILLS + '''

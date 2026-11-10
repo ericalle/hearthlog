@@ -1,5 +1,11 @@
 # Hearthlog changelog
 
+## 0.3.16
+- Forever: a kill was marked gray whenever it gave no XP. That is also true of a mob someone else tagged,
+  and at the level cap it would have been true of every kill. Gray now means what the game means by it:
+  the game is asked when the mob is seen, with the level rule as the fallback. Kills that give no XP
+  count exactly as before, they are just no longer all called gray.
+
 ## 0.3.15
 Found by reading a real Forever data file after five days of play.
 - Before 0.3.14, roll lines on Forever were read with the fields shifted, which left item links and history

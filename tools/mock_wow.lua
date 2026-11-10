@@ -116,7 +116,8 @@ _G.UnitClass = function(u) return "Druid", "DRUID" end
 _G.UnitRace = function(u) return "Tauren", "Tauren" end
 _G.UnitSex = function() return 2 end
 _G.UnitFactionGroup = function() return "Horde" end
-_G.UnitLevel = function() return M.level end
+_G.UnitLevel = function(u) local unit = u and M.units[u]; return unit and unit.level or M.level end
+_G.UnitIsTrivial = function(u) local unit = u and M.units[u]; return unit and unit.trivial or false end
 _G.UnitXP = function() return M.xp end
 _G.UnitGUID = function(u)
     if u == "player" then return "Player-1-000001" end

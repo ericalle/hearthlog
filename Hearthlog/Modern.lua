@@ -6,7 +6,7 @@ local ADDON_NAME, ns = ...
 -- These clients give addons no COMBAT_LOG_EVENT_UNFILTERED, so the combat side is rebuilt
 -- from what is still allowed, with less detail:
 --   kills        from XP gains in or right after combat, named from PARTY_KILL (who landed the blow, on which mob)
---                or failing that from your last hostile target (gray mobs give no XP)
+--                or failing that from your last hostile target. A kill that gives no XP still counts.
 --   damage taken, healing received, crits taken  from UNIT_COMBAT on the player
 --   damage done  from UNIT_COMBAT on your target, only while solo (the event does not say who hit it)
 --   deaths       the killer is your current target at the moment you die, marked as a guess
@@ -25,7 +25,7 @@ local Count, Event, Now, Call, Short, Pat = ns.Count, ns.Event, ns.Now, ns.Call,
 
 -- The kill events carry a GUID and nothing else, so every hostile creature we get a look at (target,
 -- mouseover, nameplate) is remembered by GUID, and its name by creature id for others of its kind.
-local seen, seenN = {}, 0 -- [guid] = { guid, npc, n, lvl, elite, rare, threat, blowT, t }
+local seen, seenN = {}, 0 -- [guid] = { guid, npc, n, lvl, elite, rare, trivial, threat, blowT, t }
 local npcNames = {}       -- [creature id] = name
 local lastHostile = nil   -- the record of the hostile creature last targeted
 local function Yes(v) return v ~= nil and not ns.IsSecret(v) and v and true or false end
@@ -47,6 +47,10 @@ local function See(unit)
     local cls = ns.Str(UnitClassification(unit))
     h.elite = (cls == "elite" or cls == "worldboss" or cls == "rareelite") or nil
     h.rare = (cls == "rare" or cls == "rareelite") or nil
+    if UnitIsTrivial then
+        local v = UnitIsTrivial(unit)
+        if v ~= nil and not ns.IsSecret(v) then h.trivial = v and true or false end
+    end
     return h
 end
 -- The record for a GUID, seen or not. An unseen creature is named from others of its kind, then from
@@ -64,6 +68,22 @@ local function Known(guid)
         if name and name ~= "" then h.n = name end
     end
     return h
+end
+
+-- Gray: too low to be worth XP to you. Not the same as "gave no XP": a mob someone else tagged gives none,
+-- and at the level cap nothing does. The game is asked when the mob is seen. Where it has no answer the
+-- level rule decides, and a mob whose level was never seen is not called gray.
+local function GrayLevel(me)
+    if me <= 5 then return 0 end
+    if me <= 49 then return me - math.floor(me / 10) - 5 end
+    if me == 50 then return 40 end
+    if me <= 59 then return me - math.floor(me / 5) - 1 end
+    return me - 9
+end
+local function IsGray(h)
+    if h.trivial ~= nil then return h.trivial end
+    local me = ns.Num(UnitLevel("player"))
+    return (h.lvl ~= nil and me ~= nil and h.lvl <= GrayLevel(me)) or false
 end
 
 local function NoteHostileTarget()
@@ -85,19 +105,19 @@ end)
 
 -- UNIT_DIED carries the GUID of whatever just died nearby. When it is the mob we had targeted, the kill is
 -- confirmed on the spot; the XP gain (if any) that follows names it from here. A tagged mob that gives no
--- XP (gray) is still a kill.
+-- XP is still a kill.
 local deadTarget = nil
 local lastXPKillT = 0
 local lastXPKill = nil -- the last kill taken from an XP gain: { e = its event, t, matched = a killing blow went with it }
-local function GrayKillCheck(stamp)
+local function NoXPKillCheck(stamp)
     if not deadTarget or deadTarget.t ~= stamp then return end -- consumed by the XP path
     local d = deadTarget
     deadTarget = nil
     if not d.threat then return end -- someone else's kill that we happened to target
     if not (ns.InCombat() or ns.SinceCombat() <= 4) then return end
-    local e = { n = d.n, lvl = d.lvl, npc = d.npc, elite = d.elite, rare = d.rare, xp = 0, gray = true }
+    local e = { n = d.n, lvl = d.lvl, npc = d.npc, elite = d.elite, rare = d.rare, xp = 0 }
+    if IsGray(d) then e.gray = true; Count("grayKills") end
     if IsInGroup() then e.group = true; e.assist = true; Count("assists") else Count("kills") end
-    Count("grayKills")
     ns.NoteKill(e)
 end
 ns.On("UNIT_DIED", function(arg)
@@ -107,24 +127,25 @@ ns.On("UNIT_DIED", function(arg)
     if h.blowT and Now() - h.blowT <= 3 then return end -- PARTY_KILL has this one already
     if Now() - lastXPKillT <= 2 then return end -- its XP already arrived and was counted
     local stamp = Now()
-    deadTarget = { guid = guid, n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, threat = h.threat, t = stamp }
-    ns.After(1.5, function() GrayKillCheck(stamp) end)
+    deadTarget = { guid = guid, n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, trivial = h.trivial,
+        threat = h.threat, t = stamp }
+    ns.After(1.5, function() NoXPKillCheck(stamp) end)
 end)
 
 -- PARTY_KILL: attackerGUID, targetGUID. Each one waits here for the XP gain that belongs to it. A blow
--- that gets no XP within two seconds is a gray mob: a kill when the blow was ours, an assist when it was
+-- that gets no XP within two seconds still counts: a kill when the blow was ours, an assist when it was
 -- a party member's and the mob had us on its threat list.
 local blows = {} -- oldest first: { guid, mine }
-local function GrayBlow(b)
+local function NoXPBlow(b)
     for i, q in ipairs(blows) do
         if q == b then
             table.remove(blows, i)
             local h = Known(b.guid)
             if not (b.mine or h.threat) then return end
-            local e = { n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, xp = 0, gray = true }
+            local e = { n = h.n, lvl = h.lvl, npc = h.npc, elite = h.elite, rare = h.rare, xp = 0 }
+            if IsGray(h) then e.gray = true; Count("grayKills") end
             if IsInGroup() then e.group = true end
             if b.mine then Count("kills") else e.assist = true; Count("assists") end
-            Count("grayKills")
             ns.NoteKill(e)
             return
         end
@@ -147,7 +168,7 @@ ns.On("PARTY_KILL", function(attacker, target)
     local mine = attacker ~= nil and (attacker == ns.Str(UnitGUID("player")) or attacker == ns.Str(UnitGUID("pet")))
     local b = { guid = target, mine = mine }
     tinsert(blows, b)
-    ns.After(2, function() GrayBlow(b) end)
+    ns.After(2, function() NoXPBlow(b) end)
 end)
 
 -- Called by the XP handler when a gain is not a quest or a discovery. Returns true if it was taken as a kill.
