@@ -76,6 +76,10 @@ local function EventLine(e)
     elseif k == "PVP_KILL" then return string.format("Killed %s (player).", e.who or "?")
     elseif k == "BIND" then return string.format("Home is now %s.", e.n or "?")
     elseif k == "LOOK" then return string.format("New appearance: %s.", e.n or "an item")
+    elseif k == "MOUNT" then return string.format("New mount: %s.", e.n or "?")
+    elseif k == "TOY" then return string.format("New toy: %s.", e.n or "?")
+    elseif k == "ACHIEVE" then return string.format("Achievement: %s.", e.n or "?"), "green"
+    elseif k == "STANDING" then return string.format("Reputation with %s improved.", e.f or "?"), "green"
     elseif k == "WON" then return string.format("Won the roll for %s%s.", e.n or "?", e.roll and (" with a " .. e.roll) or "")
     elseif k == "TRADE" then return string.format("Traded with %s%s%s.", e.who or "?",
         e.got and (": got " .. table.concat(e.got, ", ")) or "", e.gave and ((e.got and ", gave " or ": gave ") .. table.concat(e.gave, ", ")) or "")
@@ -103,7 +107,8 @@ local function EventLine(e)
     elseif k == "SKILL" then return string.format("%s reached %d.", e.n or "?", e.v or 0)
     elseif k == "XP" then return string.format("+%d xp (%s).", e.v or 0, e.src or "")
     elseif k == "FIGHT" then
-        if e.share then return string.format("Fight of %ds: %d damage, %d%% of the group's.", e.dur or 0, e.done or 0, e.share) end
+        if e.share then return string.format("Fight of %ds: %d damage, %d%% of the group's%s.", e.dur or 0, e.done or 0, e.share,
+            e.deaths and (", " .. e.deaths .. " died") or "") end
         return nil
     end
     return nil
@@ -186,6 +191,11 @@ function CONTENT.journey()
             if n >= 14 then break end
         end
     end
+    local rep = TopBy("rep", "d", 6)
+    if #rep > 0 then
+        tinsert(lines, { title = "REPUTATION EARNED" })
+        for _, s in ipairs(rep) do tinsert(lines, { tostring(s.rec.d or 0), s.rec.nm or tostring(s.id) }) end
+    end
     tinsert(lines, { title = "SESSIONS" })
     for i = #char.sessions, math.max(1, #char.sessions - 8), -1 do
         local s = char.sessions[i]
@@ -207,22 +217,31 @@ end
 
 function CONTENT.combat()
     local c, r = ns.char.counters, ns.char.records or {}
-    local rows = {
-        { header = "MELEE" },
-        { "Swings", tostring(c.swings) }, { "Misses", tostring(c.swingMisses) },
-        { "Dodged / parried", c.dodged .. " / " .. c.parried },
-        { "Damage done", tostring(c.damageDone) },
-        { "Biggest hit", tostring(c.maxHitDone), RecordNote(r.hitDone, "on") },
-        { "Critical hits", tostring(c.critsDone) },
-    }
-    if c.shots > 0 then tinsert(rows, { "Ranged shots", tostring(c.shots) }) end
+    local rows = {}
+    if ns.NO_CLEU then
+        -- No per-hit data on this client: totals from the game's meter only
+        tinsert(rows, { header = "DAMAGE" })
+        tinsert(rows, { "Damage done", tostring(c.damageDone) })
+        if c.overkill > 0 then tinsert(rows, { "Overkill", tostring(c.overkill) }) end
+        for _, s in ipairs(TopBy("damageBySpell", "d", 3)) do tinsert(rows, { s.rec.nm or tostring(s.id), tostring(s.rec.d or 0) }) end
+    else
+        tinsert(rows, { header = "MELEE" })
+        tinsert(rows, { "Swings", tostring(c.swings) })
+        tinsert(rows, { "Misses", tostring(c.swingMisses) })
+        tinsert(rows, { "Dodged / parried", c.dodged .. " / " .. c.parried })
+        tinsert(rows, { "Damage done", tostring(c.damageDone) })
+        tinsert(rows, { "Biggest hit", tostring(c.maxHitDone), RecordNote(r.hitDone, "on") })
+        tinsert(rows, { "Critical hits", tostring(c.critsDone) })
+        if c.shots > 0 then tinsert(rows, { "Ranged shots", tostring(c.shots) }) end
+    end
     tinsert(rows, { header = "SPELLS" })
     tinsert(rows, { "Casts", tostring(c.casts) })
     for _, s in ipairs(Top("spells", 3)) do tinsert(rows, { s.rec.nm or tostring(s.id), tostring(s.rec.n) }) end
     tinsert(rows, { header = "TAKEN" })
     tinsert(rows, { "Fights", tostring(c.fights), ns.Duration(c.fightSeconds) .. " in combat" })
     tinsert(rows, { "Damage taken", tostring(c.damageTaken) })
-    tinsert(rows, { "Biggest hit taken", tostring(c.maxHitTaken), RecordNote(r.hitTaken, "by") })
+    if not ns.NO_CLEU then tinsert(rows, { "Biggest hit taken", tostring(c.maxHitTaken), RecordNote(r.hitTaken, "by") }) end
+    if c.avoidableTaken > 0 then tinsert(rows, { "Avoidable damage", tostring(c.avoidableTaken), "stood in it" }) end
     if c.interrupts + c.dispels > 0 then tinsert(rows, { "Interrupts / dispels", c.interrupts .. " / " .. c.dispels }) end
     tinsert(rows, { header = "HEALING" })
     tinsert(rows, { "Healing done", tostring(c.healingDone), RecordNote(r.healDone, "on", "biggest") })
@@ -232,14 +251,8 @@ function CONTENT.combat()
     local lines = {}
     if ns.NO_CLEU then
         tinsert(lines, { title = "ABOUT THIS CLIENT" })
-        tinsert(lines, { "", "No combat log for addons here. Kills come from experience messages," })
-        if ns.HAS_METER then
-            tinsert(lines, { "", "damage and healing from the game's meter after each fight, and the" })
-            tinsert(lines, { "", "killer on a death is your target. Swings and crits are not available." })
-        else
-            tinsert(lines, { "", "damage from your own frame, and the killer on a death is your target." })
-            tinsert(lines, { "", "Swings, assists, healing done and who hit whom are not available." })
-        end
+        tinsert(lines, { "", "Addons get no combat log here. Kills come from XP gains," })
+        tinsert(lines, { "", ns.HAS_METER and "damage and healing from the game's meter after each fight." or "damage from your own frame only." })
     end
     tinsert(lines, { title = "MOST KILLED" })
     local kills = {}
@@ -334,12 +347,23 @@ function CONTENT.loot()
         local v = (g.i or 0) - (g.o or 0)
         tinsert(rows, { ctx:sub(1, 1):upper() .. ctx:sub(2), (v >= 0 and "+" or "-") .. Coin(math.abs(v)), "", v >= 0 and "green" or "red" })
     end
-    if c.appearances > 0 then tinsert(rows, { "Appearances learned", tostring(c.appearances) }) end
+
     tinsert(rows, { header = "AUCTION HOUSE" })
-    tinsert(rows, { "Bought", tostring(c.ahBids + c.ahBuyouts), Coin(c.ahSpent) .. " spent" })
+    local ahSpent = c.ahSpent
+    if C_AuctionHouse and gold.ah then ahSpent = math.max(ahSpent, gold.ah.o or 0) end -- commodity prices are not handed to addons
+    tinsert(rows, { "Bought", tostring(c.ahBids + c.ahBuyouts), Coin(ahSpent) .. " spent" })
     tinsert(rows, { "Posted", tostring(c.ahPosted) })
     tinsert(rows, { "Sold", tostring(c.ahSold), Coin(c.ahSoldGold) .. " earned", "green" })
-    local lines = { { title = "ITEMS LOOTED" } }
+    local lines = {}
+    if c.appearances + c.mounts + c.pets + c.toys + c.achievements > 0 then
+        tinsert(lines, { title = "COLLECTED" })
+        if c.appearances > 0 then tinsert(lines, { tostring(c.appearances), "Appearances" }) end
+        if c.mounts > 0 then tinsert(lines, { tostring(c.mounts), "Mounts" }) end
+        if c.pets > 0 then tinsert(lines, { tostring(c.pets), "Pets" }) end
+        if c.toys > 0 then tinsert(lines, { tostring(c.toys), "Toys" }) end
+        if c.achievements > 0 then tinsert(lines, { tostring(c.achievements), "Achievements" }) end
+    end
+    tinsert(lines, { title = "ITEMS LOOTED" })
     for _, it in ipairs(Top("items", 10)) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
     tinsert(lines, { title = "ITEMS USED" })
     for _, it in ipairs(Top("used", 6)) do tinsert(lines, { tostring(it.rec.n), it.rec.nm or tostring(it.id) }) end
@@ -384,7 +408,7 @@ function CONTENT.friends()
         { "Healing received", tostring(c.healingTaken) },
         { "Resurrections", tostring(c.rezzes) },
         { "Buffs received", tostring(buffsIn), string.format("%d party and guild · %d strangers", buffsInF, buffsIn - buffsInF) },
-        { "Buffs given", tostring(buffsOut), string.format("%d party and guild · %d strangers", buffsOutF, buffsOut - buffsOutF) },
+        (not ns.NO_CLEU or buffsOut > 0) and { "Buffs given", tostring(buffsOut), string.format("%d party and guild · %d strangers", buffsOutF, buffsOut - buffsOutF) } or nil,
         { "Party invites", tostring(c.partyInvites) },
         { header = "TRADING" },
         { "Trades", tostring(c.trades) },
@@ -395,6 +419,9 @@ function CONTENT.friends()
         { "Deaths to players", tostring(c.pvpDeaths), "", c.pvpDeaths > 0 and "red" or nil },
         { "Honorable kills", tostring(c.honorKills) },
     }
+    local packed = {}
+    for i = 1, 20 do if rows[i] then tinsert(packed, rows[i]) end end
+    rows = packed
     local lines = { { title = "WHISPERED MOST" } }
     local w = Top("whispers", 6)
     if #w == 0 then tinsert(lines, { "", "Nobody yet." }) end
@@ -413,6 +440,7 @@ function CONTENT.friends()
         return { tostring(s.rec.n), string.format("%s, got %d items · gave %d", s.rec.nm or s.id, s.rec.i or 0, s.rec.o or 0) } end)
     Section("MAIL", Top("mailTo", 5), function(s)
         return { tostring(s.rec.n), string.format("sent to %s, %d items", s.rec.nm or s.id, s.rec.i or 0) } end)
+    Section("DIED MOST IN YOUR GROUPS", Top("groupDeaths", 5), function(s) return { tostring(s.rec.n), s.rec.nm or tostring(s.id), "red" } end)
     Section("DAMAGE IN YOUR GROUPS", TopBy("groupDmg", "d", 6), function(s)
         return { tostring(s.rec.d or 0), string.format("%s, %d fights", s.rec.nm or s.id, s.rec.n or 0) } end)
     Section("HEALING IN YOUR GROUPS", TopBy("groupHeal", "d", 6), function(s)
@@ -432,13 +460,25 @@ local SETTINGS = {
     { header = "TOOLS" },
 }
 
+-- A rough size of the recording, worked out at most once a minute. (Building the real export string to
+-- measure it took seconds on a long journey, and this tab refreshes every two.)
+local sizeKB, sizeAt = 0, nil
+local function DataSize()
+    if sizeAt and ns.Now() - sizeAt < 60 then return sizeKB end
+    local bytes = #ns.char.events * 70
+    for _, chunks in pairs(ns.char.pos) do
+        for _, chunk in ipairs(chunks) do bytes = bytes + #chunk end
+    end
+    sizeKB, sizeAt = bytes / 1024, ns.Now()
+    return sizeKB
+end
+
 function CONTENT.settings()
     local rows = {}
     for _, s in ipairs(SETTINGS) do tinsert(rows, s) end
-    local size = 0
-    if ns.ExportString then size = #ns.ExportString() end
+    local size = DataSize()
     local lines = { { title = "DATA" },
-        { "Size", string.format("%d KB, %d sessions", size / 1024, #ns.char.sessions) },
+        { "Size", string.format("about %s, %d sessions", size >= 1024 and string.format("%.1f MB", size / 1024) or string.format("%d KB", size), #ns.char.sessions) },
         { "Oldest", ns.char.sessions[1] and Day(ns.char.sessions[1].t0) or "" },
         { "File", "WTF\\Account\\<account>\\SavedVariables\\Hearthlog.lua" },
         { title = "TOOLS" },

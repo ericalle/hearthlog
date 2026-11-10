@@ -107,10 +107,15 @@ local taxi = nil               -- { from, t0, gold }
 local lastDuel = nil
 local guildName = nil
 
+-- A context lasts 8 seconds from the thing that set it (loot, quest, taxi, repair). A window that stays
+-- open (vendor, mail, auction house, trainer, bank, trade) keeps its context until it closes.
+local openCtx = nil
 local function SetCtx(ctx) goldCtx, goldCtxT = ctx, Now() end
+local function OpenCtx(ctx) openCtx = ctx; SetCtx(ctx) end
+local function CloseCtx(ctx) if openCtx == ctx then openCtx = nil end end
 local function Ctx()
     if Now() - goldCtxT <= 8 then return goldCtx end
-    return "other"
+    return openCtx or "other"
 end
 
 local function QuestName(questID, index)
@@ -150,9 +155,9 @@ local function TalentSnapshot()
 end
 -- Total time played right now: the /played total at login plus this session so far
 local function PlayedNow()
-    local s = ns.session
-    if not s or not s.played then return nil end
-    return s.played + (Now() - s.t0)
+    local p = ns.playedAt
+    if not p then return nil end
+    return p.total + (Now() - p.t)
 end
 
 ns.On("PLAYER_LEVEL_UP", function(level)
@@ -171,7 +176,7 @@ ns.On("PLAYER_LEVEL_UP", function(level)
     end
 end)
 
-local lastXP = nil
+local lastXP, lastXPMax, lastXPLevel = nil, nil, nil
 local lastDiscoverT = 0
 local lastKillEvent, lastQuestEvent = nil, nil
 local fightEndedT = nil
@@ -184,14 +189,20 @@ end
 
 ns.On("PLAYER_XP_UPDATE", function()
     local xp = UnitXP("player")
-    if lastXP == nil then lastXP = xp return end
+    local max = ns.Num(Call("UnitXPMax", "player"))
+    local lvl = ns.level
+    if lastXP == nil then lastXP, lastXPMax, lastXPLevel = xp, max, lvl return end
     local gain = xp - lastXP
-    lastXP = xp
-    if gain <= 0 then return end -- Level rollover: the LEVEL event covers it
+    -- The gain that levels you: what was left of the old bar plus what spilled into the new one
+    if gain < 0 and lastXPMax and lvl and lastXPLevel and lvl > lastXPLevel then gain = (lastXPMax - lastXP) + xp end
+    lastXP, lastXPMax, lastXPLevel = xp, max, lvl
+    if gain <= 0 then return end
     Count("xp", gain)
     local function classify()
         local quest = Recent(lastQuestEvent, 2)
-        local kill = Recent(lastKillEvent, 3)
+        -- With the combat log the KILL event comes first and this gain belongs to it. Without it the gain
+        -- is how a kill is noticed at all, so an earlier kill must not swallow it.
+        local kill = (not ns.NO_CLEU) and Recent(lastKillEvent, 3) or nil
         if quest then
             Count("xpQuest", gain)
             quest.xp = quest.xp or gain
@@ -535,7 +546,8 @@ ns.On("PLAYER_DEAD", function()
             ns.Tally("killedByPlayers", Short(lastHit.src), Short(lastHit.src))
         end
     end
-    Event("DEATH", e)
+    local deathEvent = Event("DEATH", e)
+    if ns.NO_CLEU and ns.ImproveDeath then ns.After(1.5, function() ns.ImproveDeath(deathEvent) end) end
     -- Wipe: everyone in the party dead a moment later
     if instance and #party > 0 then
         ns.After(3, function()
@@ -618,9 +630,8 @@ end
 function ns.OnEnterWorld()
     playerGUID = UnitGUID("player")
     money = GetMoney()
-    lastXP = UnitXP("player")
+    lastXP, lastXPMax, lastXPLevel = UnitXP("player"), ns.Num(Call("UnitXPMax", "player")), ns.level
     guildName = GetGuildInfo("player")
-    party = {}
     ns.After(2, function()
         ZoneCheck()
         InstanceCheck()
@@ -641,14 +652,17 @@ end)
 -- ---------------------------------------------------------
 -- Gold
 -- ---------------------------------------------------------
-ns.On("MERCHANT_SHOW", function() SetCtx("vendor") end)
 ns.On("LOOT_OPENED", function() SetCtx("loot") end)
-ns.On("MAIL_SHOW", function() SetCtx("mail") end)
-ns.On("TRADE_SHOW", function() SetCtx("trade") end)
-ns.On("AUCTION_HOUSE_SHOW", function() SetCtx("ah") end)
-ns.On("TRAINER_SHOW", function() SetCtx("trainer") end)
 ns.On("TAXIMAP_OPENED", function() SetCtx("taxi") end)
-ns.On("BANKFRAME_OPENED", function() SetCtx("bank") end)
+for ctx, ev in pairs({ vendor = { "MERCHANT_SHOW", "MERCHANT_CLOSED" }, mail = { "MAIL_SHOW", "MAIL_CLOSED" },
+    ah = { "AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED" }, trainer = { "TRAINER_SHOW", "TRAINER_CLOSED" },
+    bank = { "BANKFRAME_OPENED", "BANKFRAME_CLOSED" } }) do
+    ns.On(ev[1], function() OpenCtx(ctx) end)
+    ns.On(ev[2], function() CloseCtx(ctx) end)
+end
+-- Trade gold moves just after the window closes, so closing it starts the 8 seconds again
+ns.On("TRADE_SHOW", function() OpenCtx("trade") end)
+ns.On("TRADE_CLOSED", function() if openCtx == "trade" then CloseCtx("trade"); SetCtx("trade") end end)
 if hooksecurefunc and RepairAllItems then
     ns.Hook("RepairAllItems", function() SetCtx("repair") end)
 end
@@ -661,6 +675,7 @@ ns.On("PLAYER_MONEY", function()
     money = now
     if delta == 0 then return end
     local ctx = Ctx()
+    if ctx == "repair" and delta > 0 then ctx = openCtx or "other" end -- a sale right after repairing
     if delta > 0 then Count("goldIn", delta) else Count("goldOut", -delta) end
     local rec = ns.Tally("gold", ctx, ctx)
     if rec then
@@ -720,8 +735,69 @@ ns.On("CHAT_MSG_SKILL", function(msg)
     if value % 25 == 0 then Event("SKILL", { n = name, v = value }) end
 end)
 
-ns.On("CHAT_MSG_COMBAT_FACTION_CHANGE", function(msg)
-    if msg then Event("REP", { txt = msg }) end
+-- Reputation: read as standing deltas off the faction list (the chat line is hidden on modern clients).
+-- Tally per faction; an event only when the standing itself changes (Neutral to Friendly).
+local repSnap = nil
+local repPending = false
+local function FactionList()
+    local out = {}
+    if C_Reputation and C_Reputation.GetNumFactions and C_Reputation.GetFactionDataByIndex then
+        local n = ns.Num(CallIn(C_Reputation, "GetNumFactions")) or 0
+        for i = 1, n do
+            local d = ns.Tbl(CallIn(C_Reputation, "GetFactionDataByIndex", i))
+            if d and not d.isHeader and ns.Str(d.name) then
+                out[d.name] = { v = ns.Num(d.currentStanding) or 0, s = ns.Num(d.reaction) }
+            end
+        end
+    elseif GetNumFactions and GetFactionInfo then
+        local n = Call("GetNumFactions") or 0
+        for i = 1, n do
+            local name, _, standingID, _, _, barValue, _, _, isHeader, _, hasRep = Call("GetFactionInfo", i)
+            if name and (not isHeader or hasRep) then out[name] = { v = tonumber(barValue) or 0, s = standingID } end
+        end
+    end
+    return out
+end
+local function RepDiff()
+    repPending = false
+    local now = FactionList()
+    if repSnap then
+        for name, cur in pairs(now) do
+            local old = repSnap[name]
+            if old and cur.v > old.v then
+                local gain = cur.v - old.v
+                Count("rep", gain)
+                local rec = ns.Tally("rep", name, name)
+                if rec then rec.d = (rec.d or 0) + gain end
+                if cur.s and old.s and cur.s > old.s then Event("STANDING", { f = name, s = cur.s }) end
+            end
+        end
+    end
+    repSnap = now
+end
+ns.On("UPDATE_FACTION", function()
+    if repPending then return end
+    repPending = true
+    ns.After(1, RepDiff)
+end)
+ns.On("PLAYER_ENTERING_WORLD", function() ns.After(4, RepDiff) end)
+
+-- Collections (clients that have them): mounts, pets, toys, achievements
+ns.On("NEW_MOUNT_ADDED", function(mountID)
+    Count("mounts")
+    local name = C_MountJournal and C_MountJournal.GetMountInfoByID and ns.Str((CallIn(C_MountJournal, "GetMountInfoByID", mountID)))
+    Event("MOUNT", { id = ns.Num(mountID), n = name })
+end)
+ns.On("NEW_PET_ADDED", function() Count("pets") end)
+ns.On("NEW_TOY_ADDED", function(itemID)
+    Count("toys")
+    local name = ns.ItemInfo(itemID)
+    Event("TOY", { id = ns.Num(itemID), n = ns.Str(name) })
+end)
+ns.On("ACHIEVEMENT_EARNED", function(id)
+    Count("achievements")
+    local _, name = Call("GetAchievementInfo", id)
+    Event("ACHIEVE", { id = ns.Num(id), n = ns.Str(name) })
 end)
 
 -- ---------------------------------------------------------
@@ -1084,6 +1160,37 @@ if hooksecurefunc then
         if rec then rec.n = rec.n + total - 1 end
     end
     if PostAuction then ns.Hook("PostAuction", Posted) elseif StartAuction then ns.Hook("StartAuction", Posted) end
+
+    -- Modern auction house (Forever, Retail): C_AuctionHouse
+    if C_AuctionHouse then
+        local function LocLink(loc)
+            if type(loc) ~= "table" then return nil end
+            if C_Item and C_Item.GetItemLink then return ns.CallIn(C_Item, "GetItemLink", loc) end
+        end
+        local function PostedModern(loc, duration, quantity)
+            local link = LocLink(loc)
+            local name = link and ns.LinkName(link) or "item"
+            Count("ahPosted")
+            local rec = ns.Tally("ahPosted", name, name, { q = link and ns.LinkQuality(link) or nil })
+            if rec then rec.n = rec.n + (tonumber(quantity) or 1) - 1 end
+        end
+        if C_AuctionHouse.PostItem then ns.Hook(C_AuctionHouse, "PostItem", PostedModern) end
+        if C_AuctionHouse.PostCommodity then ns.Hook(C_AuctionHouse, "PostCommodity", PostedModern) end
+        if C_AuctionHouse.StartCommoditiesPurchase then
+            ns.Hook(C_AuctionHouse, "StartCommoditiesPurchase", function(itemID, quantity)
+                local name = ns.ItemInfo(itemID)
+                Count("ahBuyouts")
+                local rec = ns.Tally("ahBought", itemID, name)
+                if rec then rec.n = rec.n + (tonumber(quantity) or 1) - 1 end
+            end)
+        end
+        if C_AuctionHouse.PlaceBid then
+            ns.Hook(C_AuctionHouse, "PlaceBid", function(auctionID, bid)
+                Count("ahBids")
+                Count("ahSpent", tonumber(bid) or 0)
+            end)
+        end
+    end
 end
 
 -- Whispers per person: who, how many each way. Never the text.

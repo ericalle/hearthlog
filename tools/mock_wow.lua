@@ -141,6 +141,20 @@ function M.ForeverMode()
     _G.UnitExists = function(u) return M.units[u] ~= nil end
     _G.UnitCanAttack = function(a, b) return M.units[b] and M.units[b].hostile or false end
     _G.UnitIsPlayer = function(u) return M.units[u] and M.units[u].guid and M.units[u].guid:sub(1, 6) == "Player" or false end
+    _G.UnitThreatSituation = function(a, b) return M.units[b] and M.units[b].threat end
+    _G.GetNumFactions, _G.GetFactionInfo = nil, nil
+    _G.C_Reputation = {
+        GetNumFactions = function() return #M.factions end,
+        GetFactionDataByIndex = function(i) local f = M.factions[i]
+            if f then return { name = f.name, currentStanding = f.v, reaction = f.s, isHeader = false } end end,
+    }
+    _G.C_MountJournal = { GetMountInfoByID = function(id) return "Brown Kodo" end }
+    _G.C_DeathRecap = { GetRecapEvents = function(id) return M.recaps[id] end }
+    C_Item.GetItemLink = function(loc) return M.bags[loc.bag] and M.bags[loc.bag][loc.slot] end
+    _G.C_AuctionHouse = {
+        PostItem = function() end, PostCommodity = function() end,
+        StartCommoditiesPurchase = function() end, PlaceBid = function() end,
+    }
     -- The built-in damage meter. M.meter[kind] = { { guid, name, total, me, spells = { { id, total, creature, overkill } } } }
     _G.Enum = _G.Enum or {}
     Enum.DamageMeterSessionType = { Overall = 0, Current = 1, Expired = 2 }
@@ -154,7 +168,8 @@ function M.ForeverMode()
             if not m then return { combatSources = {}, durationSeconds = 0, totalAmount = 0 } end
             local srcs = {}
             for _, s in ipairs(m[kind] or {}) do
-                tinsert(srcs, { sourceGUID = s.guid, name = s.name, totalAmount = s.total, isLocalPlayer = s.me or false })
+                tinsert(srcs, { sourceGUID = s.guid, name = s.name, totalAmount = s.total, isLocalPlayer = s.me or false,
+                    deathRecapID = s.recap, deathTimeSeconds = s.recap and 10 or nil })
             end
             return { combatSources = srcs, durationSeconds = m.dur, totalAmount = 0 }
         end,
@@ -282,6 +297,12 @@ _G.GetQuestLogTitle = function(i) return "Quest at index " .. i end
 M.level, M.xp, M.money, M.guild = 5, 400, 1234, nil
 M.party = {}
 M.units = {}
+M.recaps = {}
+M.factions = { { name = "Undercity", v = 100, s = 4 } }
+_G.GetNumFactions = function() return #M.factions end
+_G.GetFactionInfo = function(i) local f = M.factions[i]
+    if f then return f.name, "", f.s, 0, 3000, f.v, false, true, false, false, false end end
+_G.GetAchievementInfo = function(id) return id, "Level 10" end
 M.inInstance, M.instanceName = false, nil
 M.zone, M.subzone = "Mulgore", "Bloodhoof Village"
 M.wx, M.wy, M.inst = -1000, 500, 1

@@ -37,6 +37,7 @@ local DEFAULT_COUNTERS = {
     screenshots = 0, petDeaths = 0, petDamage = 0, rolls = 0, rollsWon = 0, trades = 0, mailSent = 0, mailItemsIn = 0,
     ahBids = 0, ahBuyouts = 0, ahSpent = 0, ahPosted = 0, ahSold = 0, ahSoldGold = 0,
     interrupts = 0, dispels = 0, absorbs = 0, overkill = 0, meterFights = 0, appearances = 0,
+    avoidableTaken = 0, mounts = 0, pets = 0, toys = 0, achievements = 0, rep = 0, grayKills = 0,
     meals = 0, drinks = 0, foodSeconds = 0, drinkSeconds = 0, strangerBuffs = 0,
     lootItems = 0, lootGray = 0, lootWhite = 0, emotes = 0, messages = 0,
     miles = { f = 0, m = 0, t = 0, s = 0, g = 0, v = 0, b = 0 },
@@ -44,7 +45,7 @@ local DEFAULT_COUNTERS = {
 local TALLIES = { "items", "used", "spells", "skills", "buffs", "emotes", "chat", "gold", "killers", "hurtBy",
     "env", "healedBy", "healedTo", "rezBy", "buffedBy", "buffedTo", "pvpKills", "killedByPlayers", "whispers", "errors",
     "bought", "sold", "rolls", "trades", "mailTo", "mailFrom", "ahBought", "ahPosted",
-    "damageBySpell", "damageTo", "healBySpell", "groupDmg", "groupHeal" }
+    "damageBySpell", "damageTo", "healBySpell", "groupDmg", "groupHeal", "groupDeaths", "rep" }
 
 local function Fill(dst, src)
     for k, v in pairs(src) do
@@ -157,7 +158,7 @@ end
 function ns.ClientName()
     local _, build, _, toc = GetBuildInfo()
     toc = tonumber(toc) or 0
-    if toc >= 160000 and toc < 170000 then return "forever" end
+    if toc >= 16000 and toc < 17000 then return "forever" end -- Forever is 1.60.x: interface 16001
     if toc >= 100000 then return "retail" end
     if toc < 20000 then return "era" end
     return "classic" .. toc
@@ -187,10 +188,12 @@ end
 -- /played: ask once at login, swallow the chat lines it prints
 local waitingPlayed = false
 ns.On("TIME_PLAYED_MSG", function(total, level)
-    if ns.session then
+    -- session.played is the total at the start of the session; later answers only move the running clock
+    if ns.session and ns.session.played == nil then
         ns.session.played = total
         ns.session.playedLevel = level
     end
+    ns.playedAt = { total = total, t = Now() }
     if ns.char then ns.char.meta.played = total end
     waitingPlayed = false
 end)
@@ -247,14 +250,14 @@ end
 
 function ns.Count(key, n)
     local c = ns.char and ns.char.counters
-    if not c then return end
+    if not c or ns.paused then return end
     c[key] = (c[key] or 0) + (n or 1)
 end
 
 -- Keep the largest value seen
 function ns.Max(key, v)
     local c = ns.char and ns.char.counters
-    if not c or type(v) ~= "number" then return end
+    if not c or ns.paused or type(v) ~= "number" then return end
     if v > (c[key] or 0) then c[key] = v end
 end
 

@@ -1,5 +1,48 @@
 # Hearthlog changelog
 
+## 0.3.13
+Fixes from a read-through of the whole addon. No new features.
+- Forever: kills less than three seconds apart were dropped (three quick kills recorded as one).
+- Forever: the game's meter uses display names ("Talenel Unbroken"). They are mapped back to plain character
+  names, so "healed you" works and group members appear under one name everywhere.
+- Forever: buffs from party members were never counted.
+- Forever: two fights in a row with the same length and damage could be read as one. The meter's own
+  session id is part of the check now.
+- Forever characters were labeled `era` in the data. Corrected at next login.
+- Gold by source stays "vendor", "mail", "auction house", "trainer" or "bank" for as long as that window is
+  open, not just its first 8 seconds.
+- Played time on a level-up was wrong from the second level-up of a session onward.
+- The experience from whatever makes you level is counted.
+- A loading screen while grouped no longer logs everyone as joining again.
+- Pause stops the counters as well as the log.
+- The Settings tab estimated the data size by building the whole export every two seconds. It now adds up
+  what is stored, once a minute.
+- release.json was invalid since 0.3.3 (several interface numbers where one belongs). Fixed and checked in
+  the release workflow.
+- `/hl meter` also prints healing rows, the meter's session id and how many fights were read.
+- `tools/regress_test.py`: one small scenario per bug above, each on a freshly loaded addon.
+
+## 0.3.12
+- Forever: a kill is confirmed by UNIT_DIED on the mob you had targeted, then named by the XP that follows.
+  A mob you tagged that gives no XP (gray) now counts too; one you only had targeted does not.
+- Forever: the death recap, when the client lets addons read it, replaces the guessed killer on a death
+  with the real one and the ability that did it.
+- From the meter: avoidable damage taken, and who died in your groups each fight.
+- Reputation is read as standing changes off the faction list on every client (the chat line is hidden on
+  modern ones): totals per faction on the Journey tab, and a log line when a standing improves.
+- Mounts, pets, toys and achievements earned are counted and logged; shown with appearances under
+  "Collected" on the Loot tab.
+- Forever uses the modern auction house, which the old hooks never saw. Posts, commodity purchases and bids
+  are tracked there now; gold spent comes from the auction house gold total.
+- `/hl meter` also prints each source's maxAmount.
+
+## 0.3.11
+- Forever: PvP kills count again. The honor chat line is hidden from addons there, so each honorable kill
+  (PLAYER_PVP_KILLS_CHANGED) is a kill, named from the hostile player you last had targeted.
+- Forever: the Combat tab drops the rows this client cannot fill (swings, misses, dodges, biggest hits,
+  crits) and shows damage by ability instead; Friends hides "Buffs given" when there is nothing to show.
+- Forever: healing received is read from the meter (who healed you) when the client fires no per-hit events.
+
 ## 0.3.10
 - Boats, zeppelins and the tram are detected with IsPlayerMoving (carried while not moving yourself) instead of
   the speed value, which works on every client and no longer needs the secret speed on Forever.

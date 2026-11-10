@@ -73,4 +73,4 @@ python3 tools/plot_path.py data/Hearthlog.lua --zone "Elwynn Forest"
 python3 tools/smoke_test.py
 ```
 
-A Lua 5.1 syntax check of every file is part of it. Real testing is in game with BugSack and BugGrabber installed so Lua errors are visible.
+`HL_CLIENT=forever python3 tools/smoke_test.py` runs the same session against a mock of the Forever client, and `tools/regress_test.py` runs short scenarios for bugs found later. A Lua 5.1 syntax check of every file is part of it. Real testing is in game with BugSack and BugGrabber installed so Lua errors are visible.

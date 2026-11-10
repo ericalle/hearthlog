@@ -180,6 +180,15 @@ M.cleu = { 0, "UNIT_DIED", false, nil, nil, 0, 0, "Pet-0-1-0-1-5-0009", "Growl",
 fire("COMBAT_LOG_EVENT_UNFILTERED")
 M.units.pet = nil
 
+-- Reputation read as standing deltas, an achievement
+M.factions[1].v = 350
+fire("UPDATE_FACTION")
+M.Advance(2)
+M.factions[1].v, M.factions[1].s = 3100, 5
+fire("UPDATE_FACTION")
+M.Advance(2)
+fire("ACHIEVEMENT_EARNED", 6)
+
 -- Forever: the combat log never fired above, so feed the modern replacements
 if M.forever then
     M.party = {} -- damage to the target only counts as yours while solo
@@ -191,12 +200,45 @@ if M.forever then
     fire("UNIT_COMBAT", "target", "DODGE", "", 0, 1)
     fire("UNIT_COMBAT", "player", "WOUND", "", 12, 1)
     fire("UNIT_COMBAT", "player", "HEAL", "", 40, 2)
+    fire("UNIT_DIED", "Creature-0-1-0-1-6-0003") -- the target dies: confirmed, then named by the XP that follows
     M.xp = M.xp + 45
     fire("PLAYER_XP_UPDATE")      -- an XP gain in combat with a hostile target: a kill
     M.Advance(1)
     fire("PLAYER_REGEN_ENABLED")
     M.Advance(3)
-    fire("CHAT_MSG_COMBAT_HONOR_GAIN", "Stabbyjoe dies, honorable kill Rank: Scout (Estimated Honor Points: 12)")
+    -- A gray mob we tagged: it dies, no XP follows, still a kill
+    M.units.target = { name = "Gray Rat", guid = "Creature-0-1-0-1-4075-0030", hostile = true, threat = 1 }
+    M.targetGUID = "Creature-0-1-0-1-4075-0030"
+    fire("PLAYER_TARGET_CHANGED")
+    fire("PLAYER_REGEN_DISABLED")
+    M.units.target.threat = nil   -- the threat list empties as it dies
+    fire("UNIT_THREAT_LIST_UPDATE", "player")
+    fire("UNIT_DIED", "Creature-0-1-0-1-4075-0030")
+    M.Advance(2)
+    fire("PLAYER_REGEN_ENABLED")
+    M.Advance(1)
+    -- A mob someone else killed that we only had targeted: not ours
+    M.units.target = { name = "Bystander Boar", guid = "Creature-0-1-0-1-7-0031", hostile = true }
+    M.targetGUID = "Creature-0-1-0-1-7-0031"
+    fire("PLAYER_TARGET_CHANGED")
+    fire("UNIT_DIED", "Creature-0-1-0-1-7-0031")
+    M.Advance(2)
+    M.units.target = { name = "Kobold Vermin", guid = "Creature-0-1-0-1-6-0003", hostile = true }
+    M.targetGUID = "Creature-0-1-0-1-6-0003"
+    fire("PLAYER_TARGET_CHANGED")
+    fire("NEW_MOUNT_ADDED", 12)
+    M.bags[0] = M.bags[0] or {}
+    M.bags[0][3] = "|cffffffff|Hitem:2589::::::::1:::::|h[Linen Cloth]|h|r"
+    C_AuctionHouse.PostCommodity({ bag = 0, slot = 3 }, 2, 20, 5)
+    C_AuctionHouse.StartCommoditiesPurchase(2318, 5)
+    C_AuctionHouse.PlaceBid(123, 250)
+    M.units.target = { name = "Stabbyjoe-Whitemane", guid = "Player-2-000077", hostile = true }
+    M.targetGUID = "Player-2-000077"
+    fire("PLAYER_TARGET_CHANGED")
+    fire("PLAYER_PVP_KILLS_CHANGED") -- an honorable kill: the hostile player we had targeted
+    M.units.target = { name = "Kobold Vermin", guid = "Creature-0-1-0-1-6-0003", hostile = true }
+    M.targetGUID = "Creature-0-1-0-1-6-0003"
+    fire("PLAYER_TARGET_CHANGED")
     fire("RESURRECT_REQUEST", "Danwar")
     fire("UNIT_AURA", "player", { addedAuras = { { name = "Power Word: Fortitude", isHelpful = true, sourceUnit = "party1" } } })
     M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }
@@ -226,7 +268,12 @@ if M.forever then
                 { guid = "Player-1-000002", name = "Danwar", total = 120, spells = { { id = 2050, total = 120, creature = "Zinther" } } } },
         [7] = { { guid = "Player-1-000001", name = "Zinther", total = 150, me = true, spells = { { id = 6603, total = 150, creature = "Kobold Vermin" } } } },
         [5] = { { guid = "Player-1-000001", name = "Zinther", total = 2, me = true } },
+        [8] = { { guid = "Player-1-000001", name = "Zinther", total = 60, me = true } },
+        [9] = { { guid = "Player-1-000002", name = "Danwar", total = 1, recap = 76 },
+                { guid = "Player-1-000001", name = "Zinther", total = 1, me = true, recap = 77 } },
     }
+    M.recaps[77] = { { timestamp = 5, sourceName = "Kobold Vermin", amount = 3 },
+                     { timestamp = 10, sourceName = "Rabid Dog", sourceGUID = "Creature-0-1-0-1-1766-0040", spellName = "Bite", amount = 30 } }
     fire("PLAYER_REGEN_ENABLED")
     M.Advance(2)
     fire("PLAYER_REGEN_ENABLED") -- a second read of the same fight must not double count
@@ -238,6 +285,13 @@ if M.forever then
     M.xp = M.xp + 20
     fire("PLAYER_XP_UPDATE")      -- long after combat: not a kill
     M.Advance(1)
+    -- A death the recap can explain: the guess (our target) is replaced by the real killer
+    M.dead = true
+    fire("PLAYER_DEAD")
+    M.Advance(2)
+    M.dead = false
+    fire("PLAYER_UNGHOST")
+    fire("PLAYER_ALIVE")
 end
 
 -- Assists: Danwar (party flag 0x2) fights a wolf, we heal him, he kills it -> assist.
@@ -389,8 +443,15 @@ if not FOREVER:
     assert c.petDeaths == 1, "pet death"
 else:
     t = char.tallies
-    assert c.kills == 1 and c.assists == 1 and c.partyKills == 0 and kinds["KILL"] == 2, \
-        "kills from xp gains (kills=%s assists=%s party=%s events=%s)" % (c.kills, c.assists, c.partyKills, kinds["KILL"])
+    assert c.kills == 2 and c.grayKills == 1 and c.assists == 1 and c.partyKills == 0 and kinds["KILL"] == 3, \
+        "kills from xp gains and UNIT_DIED (kills=%s gray=%s assists=%s party=%s events=%s)" % (c.kills, c.grayKills, c.assists, c.partyKills, kinds["KILL"])
+    gray = [e for e in char.events.values() if e.k == "KILL" and e.gray][0]
+    assert gray.n == "Gray Rat" and gray.xp == 0, "gray kill named from the dead target"
+    assert not [e for e in char.events.values() if e.k == "KILL" and e.n == "Bystander Boar"], "a mob we never tagged is not our kill"
+    assert c.avoidableTaken == 60 and t.groupDeaths["Danwar"].n == 1 and "Zinther" not in t.groupDeaths, "avoidable damage and group deaths from the meter"
+    assert c.mounts == 1 and [e for e in char.events.values() if e.k == "MOUNT"][0].n == "Brown Kodo", "mount learned"
+    assert c.ahPosted == 2 and t.ahPosted["Linen Cloth"].n == 60 and c.ahBuyouts == 2 and t.ahBought[2318].n == 15 and c.ahBids == 2 and c.ahSpent == 750, \
+        "modern auction house hooks (posted=%s buyouts=%s bids=%s spent=%s)" % (c.ahPosted, c.ahBuyouts, c.ahBids, c.ahSpent)
     assist = [e for e in char.events.values() if e.k == "KILL" and e.assist][0]
     assert assist.n == "Kobold Vermin" and assist.group == True and assist.xp == 20, "assist is the creature the meter saw us damage"
     assert c.appearances == 1 and [e for e in char.events.values() if e.k == "LOOK"][0].n == "Frayed Robe", "appearance learned, named from the line"
@@ -403,21 +464,28 @@ else:
     assert c.meterFights == 1 and c.interrupts == 2 and c.overkill == 12, "meter fight read once (fights=%s)" % c.meterFights
     assert t.damageBySpell[20154].d == 300 and t.damageTo["Kobold Vermin"].d == 300, "damage by ability and target"
     assert t.healBySpell[635].d == 80 and t.healedTo["Danwar"].d == 80 and t.healedBy["Danwar"].d == 120, "healing both ways from the meter"
+    assert c.healingTaken == 40, "healing received stays with UNIT_COMBAT when that event exists (got %s)" % c.healingTaken
     assert t.hurtBy["Kobold Vermin"].d == 150, "hurt by from the meter"
     assert t.groupDmg["Danwar"].d == 600 and t.groupHeal["Danwar"].d == 120, "group members' numbers"
     fights = [e for e in char.events.values() if e.k == "FIGHT" and e.share is not None]
     assert len(fights) == 1 and fights[0].share == 40 and fights[0].done == 400, "fight event carries share (got %s)" % [ (f.share, f.done) for f in fights]
     assert char.records.hitDone.who == "Kobold Vermin", "biggest hit names the target"
-    assert c.pvpKills == 1 and t.pvpKills["Stabbyjoe"].n == 1, "honor line pvp kill"
+    assert c.pvpKills == 1 and c.honorKills == 1 and t.pvpKills["Stabbyjoe"].n == 1 and kinds["PVP_KILL"] == 1, "pvp kill via the honor counter (kills=%s hk=%s)" % (c.pvpKills, c.honorKills)
     assert c.rezzes == 2 and t.rezBy["Danwar"].n == 1 and t.rezBy["Meredith"].n == 1, "rez via RESURRECT_REQUEST"
     assert t.buffedBy["Danwar"].n == 1 and t.buffedBy["Danwar"].f == 1, "buff from party via UNIT_AURA"
-    deaths = [e for e in char.events.values() if e.k == "DEATH"]
-    assert deaths[-1].by == "Mangy Wolf" and deaths[-1].guess == True, "death killer guessed from target"
+    deaths = sorted([e for e in char.events.values() if e.k == "DEATH"], key=lambda e: e.t)
+    assert deaths[-2].by == "Mangy Wolf" and deaths[-2].guess == True, "death killer guessed from target"
     assert t.killers[299].n == 1, "killers tally from guessed death"
+    assert deaths[-1].by == "Rabid Dog" and deaths[-1].recap == True and deaths[-1].guess is None and deaths[-1].spell == "Bite", \
+        "death recap replaces the guess (by=%s)" % deaths[-1].by
+    assert t.killers[1766].n == 1 and 6 not in t.killers, "the guess's tally is taken back, the real killer filed"
     assert c.duels == 1 and c.binds == 1 and c.trades == 1 and c.ahSold == 2 and c.mailSent == 1, "non-combat features unaffected"
     assert "Food" not in [r.nm for r in char.tallies.spells.values()], "Food must not be a cast"
     print("forever OK: kills from xp lines, UNIT_COMBAT damage, honor, rez, party buffs, guessed death")
 print("medium set OK: buffs given, rolls, trade, mail, auction house, pet")
+assert c.rep == 3000 and char.tallies.rep["Undercity"].d == 3000 and kinds["STANDING"] == 1, "reputation deltas (got %s)" % c.rep
+assert c.achievements == 1 and [e for e in char.events.values() if e.k == "ACHIEVE"][0].n == "Level 10", "achievement"
+print("rep and achievements OK")
 print("export round-trip: OK (%d events, %d maps)" % (len(dchar["events"]), len(dec["maps"])))
 t = char.tallies
 print("tallies:", {g: {k: dict(v.items()) for k, v in t[g].items()} for g in ["items", "used", "spells", "skills", "buffs", "emotes", "chat", "gold"]})
