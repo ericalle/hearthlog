@@ -86,7 +86,8 @@ M.Advance(5)
 
 -- Loot, gear, hearth, taxi
 fire("CHAT_MSG_LOOT", "You receive loot: |cff0070dd|Hitem:5555::::::::6:::::|h[Blue Thing]|h|r.")
-fire("PLAYER_EQUIPMENT_CHANGED", 1, true)
+M.gear[5] = "|cff1eff00|Hitem:2345::::::::6:::::|h[Green Vest]|h|r" -- a new chest piece goes on
+fire("PLAYER_EQUIPMENT_CHANGED", 5, false)
 fire("UNIT_SPELLCAST_SUCCEEDED", "player", "cast-1", 8690)
 fire("TAXIMAP_OPENED")
 M.money = M.money - 500

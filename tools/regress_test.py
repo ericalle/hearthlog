@@ -180,6 +180,35 @@ M.Fire("PARTY_KILL", DAN, x); M.Advance(5)
 return c.kills, c.grayKills, #kills()''')
 assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
 
+# ---- 0.3.17 ----
+# Gear is logged the first time an item is worn, whatever the equip event's flag says. What an earlier level-up
+# already recorded is not logged again, and neither is swapping back to something worn before.
+VEST, AXE = '"|cff1eff00|Hitem:2345::::::::6:::::|h[Green Vest]|h|r"', '"|cffffffff|Hitem:3456::::::::6:::::|h[Plain Axe]|h|r"'
+for forever in (False, True):
+    n, names, base = run(forever, '''
+-- as if this character had been recording before this version: no gear entries, the hat on record at level 5
+ns.char.gearSeen = nil
+for i = #ns.char.events, 1, -1 do if ns.char.events[i].k == "GEAR" then table.remove(ns.char.events, i) end end
+tinsert(ns.char.events, { k = "LEVEL", v = 5, t = 1, gear = { [1] = 1234 } })
+M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(8)
+M.gear[5] = VEST; M.Fire("PLAYER_EQUIPMENT_CHANGED", 5, false); M.Advance(2)
+M.gear[16] = AXE; M.Fire("UNIT_INVENTORY_CHANGED", "player"); M.Advance(2)
+M.gear[16] = nil; M.Fire("PLAYER_EQUIPMENT_CHANGED", 16, true); M.Advance(2)
+M.gear[16] = AXE; M.Fire("PLAYER_EQUIPMENT_CHANGED", 16, false); M.Advance(2)
+local names, base = {}, false
+for _, e in ipairs(ns.char.events) do
+    if e.k == "GEAR" then names[#names + 1] = e.n; base = base or e.base == true end
+end
+return #names, table.concat(names, ","), base'''.replace("VEST", VEST).replace("AXE", AXE))
+    assert (n, names, base) == (2, "Green Vest,Plain Axe", False), (n, names, base)
+    # A character with nothing on record: what is worn when recording begins is the starting set
+    n, base = run(forever, '''
+M.Advance(8)
+local n, base = 0, true
+for _, e in ipairs(ns.char.events) do if e.k == "GEAR" then n = n + 1; base = base and e.base == true end end
+return n, base''')
+    assert (n, base) == (1, True), (n, base)
+
 # ---- 0.3.16 ----
 # Forever: no XP is not the same as gray. A mob someone else tagged and anything killed at the level cap count
 # as kills without the gray mark; a mob the game calls trivial has it.

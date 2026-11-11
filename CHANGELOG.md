@@ -1,5 +1,12 @@
 # Hearthlog changelog
 
+## 0.3.17
+- Putting on a new piece of gear was never logged on Forever: 52 different items worn over 21 levels and
+  not one gear entry. The equip event's second argument was read as "the slot now holds an item", which
+  it does not reliably mean. The event is no longer trusted for anything: when equipment changes the worn
+  slots are read, and an item is logged the first time it is worn. Nothing is lost from before, since
+  every level-up already carries the full set that was worn, and those items are not logged a second time.
+
 ## 0.3.16
 - Forever: a kill was marked gray whenever it gave no XP. That is also true of a mob someone else tagged,
   and at the level cap it would have been true of every kill. Gray now means what the game means by it:

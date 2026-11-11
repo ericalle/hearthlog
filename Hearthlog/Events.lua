@@ -27,7 +27,7 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   PARTY      add={..}, rem={..}, n=size
 --   GOLD       v=copper (signed), ctx=vendor|loot|quest|mail|trade|ah|taxi|trainer|repair|other
 --   LOOT       i=itemID, n=name, q=quality
---   GEAR       slot=, i=itemID, n=name, q=quality
+--   GEAR       slot=, i=itemID, n=name, q=quality: the first time an item is worn (base=true: worn when recording began)
 --   SPELL      i=spellID, n=name
 --   TALENT     n=talent name, id=spellID, v=rank now (trait clients only; tab clients have talents= on LEVEL)
 --   SKILL      n=skill name, v=new value (only every 25 points; every skill-up updates tallies.skills)
@@ -775,12 +775,46 @@ ns.On("CHAT_MSG_LOOT", function(msg)
     end
 end)
 
-ns.On("PLAYER_EQUIPMENT_CHANGED", function(slot, hasItem)
-    if not hasItem then return end
-    local link = GetInventoryItemLink("player", slot)
-    if not link then return end
-    Event("GEAR", { slot = slot, i = ns.ItemId(link), n = ns.LinkName(link), q = ns.LinkQuality(link) })
-end)
+-- Gear: an event the first time an item is worn. The equip event's second argument was trusted to mean
+-- "the slot now holds an item" and on Forever no gear was ever logged. Nothing is read from the event now:
+-- on any sign of an equipment change the worn slots are looked at, and whatever has not been worn before
+-- is logged. Swapping two weapons back and forth logs each of them once.
+local gearScanDue, gearBaseUntil = false, nil
+local function ScanGear()
+    gearScanDue = false
+    local char = ns.char
+    if not char or ns.paused then return end
+    local seen = char.gearSeen
+    if not seen then
+        -- First look for this character. What was worn at an earlier level-up is already on record.
+        seen = {}
+        local onRecord = false
+        for _, e in ipairs(char.events) do
+            if e.k == "LEVEL" and type(e.gear) == "table" then
+                for _, id in pairs(e.gear) do seen[id] = true; onRecord = true end
+            end
+        end
+        char.gearSeen = seen
+        gearBaseUntil = (not onRecord) and (Now() + 60) or nil -- nothing on record: what is worn now is the starting set
+    end
+    for slot = 1, 19 do
+        local link = ns.Str(GetInventoryItemLink("player", slot))
+        local id = link and ns.ItemId(link)
+        if id and not seen[id] then
+            seen[id] = true
+            Event("GEAR", { slot = slot, i = id, n = ns.LinkName(link), q = ns.LinkQuality(link),
+                base = (gearBaseUntil ~= nil and Now() <= gearBaseUntil) or nil })
+        end
+    end
+end
+local function GearChanged()
+    if gearScanDue then return end
+    gearScanDue = true
+    ns.After(0.5, ScanGear)
+end
+ns.On("PLAYER_EQUIPMENT_CHANGED", GearChanged)
+ns.On("UNIT_INVENTORY_CHANGED", function(unit) if unit == "player" then GearChanged() end end)
+ns.On("PLAYER_ENTERING_WORLD", function() ns.After(5, GearChanged) end)
 
 -- ---------------------------------------------------------
 -- Spells, skills, reputation
