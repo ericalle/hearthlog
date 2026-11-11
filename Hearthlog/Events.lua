@@ -21,6 +21,8 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   ALIVE      ghost=true when released to ghost, res=name of who resurrected (if offered), dur=seconds dead
 --   KILL       n=mob name, npc=id, lvl=mob level, elite=true, rare=true, assist=true when a party member got the credit
 --   FIGHT      dur=seconds, taken=damage taken, healed=healing done, party={..}
+--              from the meter: done=your damage, share=your percent of the group's, deaths=, and in a group
+--              foes={ {n=name, id=creature id, d=damage it took, m=your part, c=elite|rare|worldboss} }
 --   ZONE       n=zone, sub=subzone
 --   INST_IN    n=instance name, kind=party|raid|pvp, party={..}
 --   INST_OUT   n=, dur=seconds inside, kills=, deaths=
@@ -819,11 +821,19 @@ ns.On("PLAYER_ENTERING_WORLD", function() ns.After(5, GearChanged) end)
 -- ---------------------------------------------------------
 -- Spells, skills, reputation
 -- ---------------------------------------------------------
-ns.On("LEARNED_SPELL_IN_TAB", function(spellID)
+-- Spells learned. The event was renamed on the modern client and the old name never fires there, so both
+-- are listened for, and a spell reported under both counts once.
+local learnedSpells = {}
+local function LearnedSpell(spellID)
+    spellID = ns.Num(spellID)
+    if not spellID or learnedSpells[spellID] then return end
+    learnedSpells[spellID] = true
     local name = Call("GetSpellInfo", spellID)
     if not name and C_Spell and C_Spell.GetSpellName then name = CallIn(C_Spell, "GetSpellName", spellID) end
-    Event("SPELL", { i = spellID, n = name })
-end)
+    Event("SPELL", { i = spellID, n = ns.Str(name) })
+end
+ns.On("LEARNED_SPELL_IN_TAB", LearnedSpell)
+ns.On("LEARNED_SPELL_IN_SKILL_LINE", LearnedSpell)
 
 ns.On("CHAT_MSG_SKILL", function(msg)
     -- "Your skill in Two-Handed Maces has increased to 14."

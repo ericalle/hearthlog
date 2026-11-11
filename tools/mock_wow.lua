@@ -117,6 +117,16 @@ _G.UnitRace = function(u) return "Tauren", "Tauren" end
 _G.UnitSex = function() return 2 end
 _G.UnitFactionGroup = function() return "Horde" end
 _G.UnitLevel = function(u) local unit = u and M.units[u]; return unit and unit.level or M.level end
+_G.UnitIsUnit = function(a, b) return a == b end
+_G.UnitInParty = function(u)
+    local unit = u and M.units[u]
+    if not unit then return false end
+    for _, p in ipairs(M.party) do
+        if M.units[p] and M.units[p].guid == unit.guid then return true end
+    end
+    return false
+end
+_G.UnitInRaid = function(u) return nil end
 _G.UnitIsTrivial = function(u) local unit = u and M.units[u]; return unit and unit.trivial or false end
 _G.UnitXP = function() return M.xp end
 _G.UnitGUID = function(u)

@@ -180,6 +180,75 @@ M.Fire("PARTY_KILL", DAN, x); M.Advance(5)
 return c.kills, c.grayKills, #kills()''')
 assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
 
+# ---- 0.3.18 ----
+# Inside an instance the game hides what you target and who died. The kills are still counted; the names come
+# from the meter when the fight has been read, the fight keeps its list of enemies, and what was hidden is noted.
+INSTANCE = '''
+M.inInstance = true
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }
+M.Fire("GROUP_ROSTER_UPDATE")
+M.units.target = { name = HIDDEN, hostile = true }; M.targetGUID = HIDDEN
+M.Fire("PLAYER_TARGET_CHANGED")
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(8)
+BLOWS
+M.xp = M.xp + 40; M.Fire("PLAYER_XP_UPDATE"); M.Advance(1)
+M.xp = M.xp + 40; M.Fire("PLAYER_XP_UPDATE"); M.Advance(1)
+M.meter = { dur = 10,
+    [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 300, me = true, spells = { { id = 6603, total = 300 } } },
+            { guid = "Player-1-000002", name = "Danwar the Bold", total = 500 } },
+    [10] = { FOES } }
+M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 3); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+local names, fight = {}, nil
+for _, e in ipairs(ns.char.events) do
+    if e.k == "KILL" then names[#names + 1] = tostring(e.n) .. ":" .. tostring(e.npc) end
+    if e.k == "FIGHT" then fight = e end
+end
+local i = ns.char.meta.inst or {}
+return table.concat(names, ","), fight.foes and #fight.foes, fight.foes and fight.foes[1].n, i.targetNameSecret, i.blowTargetSecret, i.foeName'''
+ELEMENTAL = '{ creatureID = 11321, name = "Molten Elemental", total = 800, spells = { { id = 6603, total = 300, unit = "Zinther Unbroken" } } }'
+SLIME = '{ creatureID = 11322, name = "Searing Blade Cultist", total = 200 }'
+# Everything hidden, one kind of enemy: both kills take its name
+out = run(True, INSTANCE.replace("HIDDEN", "M.SECRET").replace("BLOWS", 'M.Fire("PARTY_KILL", M.SECRET, M.SECRET); M.Fire("PARTY_KILL", M.SECRET, M.SECRET)').replace("FOES", ELEMENTAL))
+assert tuple(out) == ("Molten Elemental:11321,Molten Elemental:11321", 1, "Molten Elemental", 1, 2, 1), tuple(out)
+# Everything hidden, two kinds: the kills stay unnamed (which was which is not known) but the fight has both
+out = run(True, INSTANCE.replace("HIDDEN", "M.SECRET").replace("BLOWS", "").replace("FOES", ELEMENTAL + ", " + SLIME))
+assert tuple(out)[:3] == ("nil:nil,nil:nil", 2, "Molten Elemental"), tuple(out)
+# The kill event readable, names not: each kill is named by its creature id
+out = run(True, INSTANCE.replace("HIDDEN", "M.SECRET").replace("FOES", ELEMENTAL + ", " + SLIME).replace("BLOWS",
+    'M.Fire("PARTY_KILL", "Player-1-000002", "Creature-0-1-0-1-11322-0001"); M.Fire("PARTY_KILL", "Player-1-000001", "Creature-0-1-0-1-11321-0002")'))
+assert tuple(out)[:2] == ("Searing Blade Cultist:11322,Molten Elemental:11321", 2), tuple(out)
+
+# Forever: a buff you put on someone counts once, however many unit names report it, and a spell learned is
+# logged under the event's new name
+given, friend, stranger, spells = run(True, '''
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }
+M.units.target = { name = "Danwar", guid = "Player-1-000002" }
+local might = { addedAuras = { { isHelpful = true, sourceUnit = "player", auraInstanceID = 5, spellId = 19740 } } }
+M.Fire("UNIT_AURA", "target", might); M.Fire("UNIT_AURA", "party1", might)
+M.Fire("UNIT_AURA", "party1", { addedAuras = { { isHelpful = true, sourceUnit = "party1", auraInstanceID = 6 } } }) -- his own buff
+M.units.target = { name = "Passerby", guid = "Player-1-000009" }
+M.Fire("UNIT_AURA", "target", { addedAuras = { { isHelpful = true, sourceUnit = "player", auraInstanceID = 7, spellId = 19740 } } })
+M.Fire("LEARNED_SPELL_IN_SKILL_LINE", 19740, 2, false); M.Fire("LEARNED_SPELL_IN_TAB", 19740)
+local t, spells = ns.char.tallies.buffedTo, 0
+for _, e in ipairs(ns.char.events) do if e.k == "SPELL" then spells = spells + 1 end end
+return t.Danwar.n, t.Danwar.f, t.Passerby.n .. ":" .. tostring(t.Passerby.f), spells''')
+assert (given, friend, stranger, spells) == (1, 1, "1:nil", 1), (given, friend, stranger, spells)
+
+# Forever: a death the recap explains carries the killer's level when that kind of mob has been seen
+lvl = run(True, '''
+M.units.nameplate1 = { name = "Rabid Dog", guid = "Creature-0-1-0-1-565-0007", hostile = true, level = 19 }
+M.Fire("NAME_PLATE_UNIT_ADDED", "nameplate1")
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(5)
+M.meter = { dur = 5, [0] = { { guid = "Player-1-000001", name = "Zinther", total = 10, me = true } },
+    [9] = { { guid = "Player-1-000001", name = "Zinther", total = 1, me = true, recap = 81 } } }
+M.recaps[81] = { { timestamp = 9, sourceName = "Rabid Dog", sourceGUID = "Creature-0-1-0-1-565-0007", spellName = "Bite", amount = 30 } }
+M.Fire("PLAYER_DEAD"); M.Advance(1)
+M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 4); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(4)
+local d
+for _, e in ipairs(ns.char.events) do if e.k == "DEATH" then d = e end end
+return d.by .. ":" .. tostring(d.lvl)''')
+assert lvl == "Rabid Dog:19", lvl
+
 # ---- 0.3.17 ----
 # Gear is logged the first time an item is worn, whatever the equip event's flag says. What an earlier level-up
 # already recorded is not logged again, and neither is swapping back to something worn before.

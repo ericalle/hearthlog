@@ -177,33 +177,51 @@ local function ReadFight(fightEvent, fightDur)
         end
     end
 
-    -- Who took that damage, when the rows above did not say. The meter's "enemy damage taken" view has one
-    -- source per enemy. Alone, what an enemy took is what we dealt; in a group each enemy is broken down
-    -- by who hit it and only our part is kept.
-    if not gotTargets and myDamage > 0 then
-        local foes = ns.Tbl(Session(T.EnemyTaken))
-        for _, src in ipairs(foes and ns.Tbl(foes.combatSources) or {}) do
-            local foe, total = Str(src.name), Num(src.totalAmount)
-            if foe and foe ~= "" and total and total > 0 then
-                local part = nil
-                if #sources == 1 and not IsInGroup() then
-                    part = total
-                else
-                    local det = ns.Tbl(Source(T.EnemyTaken, Str(src.sourceGUID), Num(src.sourceCreatureID)))
-                    for _, sp in ipairs(det and ns.Tbl(det.combatSpells) or {}) do
-                        local d = ns.Tbl(sp.combatSpellDetails)
-                        if d and Plain(roster, Str(d.unitName)) == myName then
-                            local amt = Num(d.amount)
-                            if not amt or amt <= 0 then amt = Num(sp.totalAmount) end
-                            if amt then part = (part or 0) + amt end
-                        end
+    -- Who took the damage. The rows above carry no target, but the meter's "enemy damage taken" view has
+    -- one source per kind of enemy. Alone, what an enemy took is what we dealt; in a group each enemy is
+    -- broken down by who hit it and only our part is ours.
+    local foes = {}
+    local view = ns.Tbl(Session(T.EnemyTaken))
+    for _, src in ipairs(view and ns.Tbl(view.combatSources) or {}) do
+        if ns.InstNote then ns.InstNote("foeName", src.name); ns.InstNote("foeId", src.sourceCreatureID) end
+        local foe, id, total = Str(src.name), Num(src.sourceCreatureID), Num(src.totalAmount)
+        if foe == "" then foe = nil end
+        if total and total > 0 and (foe or id) then
+            local part = nil
+            if #sources == 1 and not IsInGroup() then
+                part = total
+            else
+                local det = ns.Tbl(Source(T.EnemyTaken, Str(src.sourceGUID), id))
+                for _, sp in ipairs(det and ns.Tbl(det.combatSpells) or {}) do
+                    local d = ns.Tbl(sp.combatSpellDetails)
+                    if d and Plain(roster, Str(d.unitName)) == myName then
+                        local amt = Num(d.amount)
+                        if not amt or amt <= 0 then amt = Num(sp.totalAmount) end
+                        if amt then part = (part or 0) + amt end
                     end
                 end
-                if part and part > 0 then
-                    AddD("damageTo", foe, foe, math.min(part, myDamage))
-                    if ns.Engaged then ns.Engaged(foe) end
-                end
             end
+            local cls = Str(src.classification)
+            tinsert(foes, { n = foe, id = id, d = total, m = part, c = (cls ~= nil and cls ~= "" and cls ~= "normal") and cls or nil })
+        end
+    end
+    if not gotTargets and myDamage > 0 then
+        for _, f in ipairs(foes) do
+            if f.n and f.m and f.m > 0 then
+                AddD("damageTo", f.n, f.n, math.min(f.m, myDamage))
+                if ns.Engaged then ns.Engaged(f.n) end
+            end
+        end
+    end
+    if #foes > 0 then
+        -- Kills logged during this fight without a name get one from this list
+        if ns.NameKills then ns.NameKills(foes, fightEvent and fightEvent.t and (fightEvent.t - dur - 3) or nil) end
+        -- A group fight keeps the list (the six biggest): in a dungeon it is the only record of what was
+        -- fought, and it says which fights were the bosses
+        if fightEvent and (IsInGroup() or (IsInInstance and (IsInInstance()) == true)) then
+            table.sort(foes, function(x, y) return x.d > y.d end)
+            fightEvent.foes = {}
+            for i = 1, math.min(#foes, 6) do fightEvent.foes[i] = foes[i] end
         end
     end
 

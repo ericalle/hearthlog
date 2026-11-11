@@ -11,7 +11,8 @@ local ADDON_NAME, ns = ...
 --   damage done  from UNIT_COMBAT on your target, only while solo (the event does not say who hit it)
 --   deaths       the killer is your current target at the moment you die, marked as a guess
 --   pvp kills    from the honorable-kill counter, named from your last hostile player target
---   buffs        from the aura list, for group members only (strangers cannot be named)
+--   buffs        received: from your own aura list, for group members only (strangers cannot be named)
+--                given: from the aura list of group members and your target
 -- World damage and pet stats are not available here.
 ns.LOADED.Modern = true
 if not ns.NO_CLEU then return end
@@ -27,8 +28,21 @@ local Count, Event, Now, Call, Short, Pat = ns.Count, ns.Event, ns.Now, ns.Call,
 -- mouseover, nameplate) is remembered by GUID, and its name by creature id for others of its kind.
 local seen, seenN = {}, 0 -- [guid] = { guid, npc, n, lvl, elite, rare, trivial, threat, blowT, t }
 local npcNames = {}       -- [creature id] = name
+local npcLevels = {}      -- [creature id] = level last seen
 local lastHostile = nil   -- the record of the hostile creature last targeted
 local function Yes(v) return v ~= nil and not ns.IsSecret(v) and v and true or false end
+
+-- Inside an instance the game hides part of what it shows outside. Which part is not written down anywhere,
+-- so it is counted: each thing asked for in an instance is noted as readable, hidden (Secret) or absent
+-- (Nil). The counts sit in the saved file under meta.inst.
+local function InstNote(key, value)
+    if not (ns.char and IsInInstance and Yes((IsInInstance()))) then return end
+    local m = ns.char.meta
+    m.inst = m.inst or {}
+    if value == nil then key = key .. "Nil" elseif ns.IsSecret(value) then key = key .. "Secret" end
+    m.inst[key] = (m.inst[key] or 0) + 1
+end
+ns.InstNote = InstNote
 local function See(unit)
     if not (UnitExists and Yes(UnitExists(unit))) then return nil end
     if not Yes(UnitCanAttack("player", unit)) or Yes(UnitIsPlayer(unit)) then return nil end
@@ -43,7 +57,10 @@ local function See(unit)
     h.n, h.t = name, Now()
     if h.npc then npcNames[h.npc] = name end
     local lvl = ns.Num(UnitLevel(unit))
-    if lvl and lvl > 0 then h.lvl = lvl end
+    if lvl and lvl > 0 then
+        h.lvl = lvl
+        if h.npc then npcLevels[h.npc] = lvl end
+    end
     local cls = ns.Str(UnitClassification(unit))
     h.elite = (cls == "elite" or cls == "worldboss" or cls == "rareelite") or nil
     h.rare = (cls == "rare" or cls == "rareelite") or nil
@@ -87,6 +104,9 @@ local function IsGray(h)
 end
 
 local function NoteHostileTarget()
+    InstNote("targetName", UnitName("target"))
+    InstNote("targetGuid", UnitGUID("target"))
+    InstNote("targetAttackable", UnitCanAttack("player", "target"))
     local h = See("target")
     if not h then return end
     -- On its threat list means we have tagged it (or it has us). Once seen it sticks for that mob:
@@ -121,6 +141,7 @@ local function NoXPKillCheck(stamp)
     ns.NoteKill(e)
 end
 ns.On("UNIT_DIED", function(arg)
+    InstNote("diedGuid", arg)
     local guid = ns.Str(arg)
     local h = lastHostile
     if not guid or not h or h.guid ~= guid then return end
@@ -152,6 +173,8 @@ local function NoXPBlow(b)
     end
 end
 ns.On("PARTY_KILL", function(attacker, target)
+    InstNote("blowAttacker", attacker)
+    InstNote("blowTarget", target)
     attacker, target = ns.Str(attacker), ns.Str(target)
     if not target or not ns.NpcId(target) then return end -- players are counted from the honor counter below
     local h = Known(target)
@@ -205,6 +228,28 @@ function ns.KillFromXP(gain)
     lastXPKill = { e = ns.NoteKill(e), t = Now(), matched = b ~= nil }
     return true
 end
+
+-- Called when a fight has been read from the meter. The meter's enemy view names every kind of creature
+-- the group fought, by creature id. That names kills the kill event could only give an id for. Inside
+-- instances, where the game hides what you are targeting, it is the only source of names: there a kill
+-- with no id at all is named when the fight had a single kind of enemy.
+function ns.NameKills(foes, since)
+    for _, f in ipairs(foes) do
+        if f.id and f.n then npcNames[f.id] = f.n end
+    end
+    local only = (#foes == 1 and foes[1].n) and foes[1] or nil
+    local events = ns.char and ns.char.events
+    if not events or not since then return end
+    for i = #events, 1, -1 do
+        local e = events[i]
+        if (e.t or 0) < since then break end
+        if e.k == "KILL" and not e.n then
+            if e.npc then e.n = npcNames[e.npc]
+            elseif only then e.n, e.npc = only.n, only.id end
+        end
+    end
+end
+ns.On("ENCOUNTER_END", function(_, name) InstNote("encounter", name) end)
 
 -- UNIT_COMBAT: unit, action (WOUND, HEAL, DODGE, PARRY, BLOCK, MISS, ...), descriptor (CRITICAL, ...), amount
 ns.On("UNIT_COMBAT", function(unit, action, descriptor, amount)
@@ -315,6 +360,7 @@ function ns.ImproveDeath(e)
         ns.Tally("killedByPlayers", Short(who), Short(who))
     elseif ns.Str(last.sourceName) then
         e.npc = guid and ns.NpcId(guid) or nil
+        e.lvl = e.npc and npcLevels[e.npc] or nil
         ns.Tally("killers", e.npc or who, who)
     end
 end
@@ -327,21 +373,48 @@ ns.On("RESURRECT_REQUEST", function(name)
 end)
 
 -- New helpful auras on the player, credited to group members when the source is a group unit
+-- The other way round, a helpful aura that appears on another player with you as its source is a buff
+-- you gave. One person can be reported under two unit names at once (party2 and target, raid7 and party2),
+-- so each new aura is counted once per person.
+local givenAt, givenN = {}, 0 -- [name|aura] = when counted
 ns.On("UNIT_AURA", function(unit, info)
-    if unit ~= "player" then return end
+    unit = ns.Str(unit)
     info = ns.Tbl(info)
     local added = info and ns.Tbl(info.addedAuras)
-    if not added then return end
+    if not unit or not added then return end
+    if unit == "player" then
+        for _, aura in ipairs(added) do
+            aura = ns.Tbl(aura)
+            if not aura then break end
+            local src = ns.Str(aura.sourceUnit)
+            -- sourceUnit names who cast it; isFromPlayerOrPlayerPet is true for any player's cast, so it is no use here
+            if Yes(aura.isHelpful) and src and (src:find("^party") or src:find("^raid")) then
+                local who = Short(ns.Str(UnitName(src)))
+                if who then
+                    local rec = ns.Tally("buffedBy", who, who)
+                    if rec then rec.f = (rec.f or 0) + 1 end
+                end
+            end
+        end
+        return
+    end
+    local grouped = unit:find("^party%d") ~= nil or unit:find("^raid%d") ~= nil
+    if not (grouped or unit == "target") then return end
+    if not Yes(UnitIsPlayer(unit)) or (UnitIsUnit and Yes(UnitIsUnit(unit, "player"))) then return end
+    local who = Short(ns.Str(UnitName(unit)))
+    if not who then return end
+    local friend = grouped or (UnitInParty and Yes(UnitInParty(unit))) or (UnitInRaid and Yes(UnitInRaid(unit)))
     for _, aura in ipairs(added) do
         aura = ns.Tbl(aura)
         if not aura then break end
-        local src = ns.Str(aura.sourceUnit)
-        -- sourceUnit names who cast it; isFromPlayerOrPlayerPet is true for any player's cast, so it is no use here
-        if aura.isHelpful and src and (src:find("^party") or src:find("^raid")) then
-            local who = Short(ns.Str(UnitName(src)))
-            if who then
-                local rec = ns.Tally("buffedBy", who, who)
-                if rec then rec.f = (rec.f or 0) + 1 end
+        if Yes(aura.isHelpful) and ns.Str(aura.sourceUnit) == "player" then
+            local key = who .. "|" .. tostring(ns.Num(aura.auraInstanceID) or ns.Num(aura.spellId) or "?")
+            if givenAt[key] == nil or Now() - givenAt[key] > 2 then
+                if givenN >= 200 then givenAt, givenN = {}, 0 end
+                if givenAt[key] == nil then givenN = givenN + 1 end
+                givenAt[key] = Now()
+                local rec = ns.Tally("buffedTo", who, who)
+                if rec and friend then rec.f = (rec.f or 0) + 1 end
             end
         end
     end

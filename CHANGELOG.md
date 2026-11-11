@@ -1,5 +1,20 @@
 # Hearthlog changelog
 
+## 0.3.18
+Found by checking every kind of entry against a real Forever data file, not just the ones that looked wrong.
+- Dungeons on Forever: none of the 197 kills from two dungeon nights has a name, a level or a creature id,
+  while every group kill outside is named. Inside an instance the game hides what you are targeting. The
+  meter still works there, so when a fight has been read its list of enemies names the kills from that
+  fight: by creature id when the kill event gave one, and otherwise when the fight had a single kind of
+  enemy. Group fights also keep that list (name, creature id, damage taken, your part), which is the only
+  record of what a dungeon pull was and shows which fights were the bosses.
+- What the game hides inside an instance is counted in the saved file (`meta.inst`), so the next dungeon
+  run answers it without guessing.
+- Forever: learning a spell was never logged. The event has a new name on the modern client.
+- Forever: buffs you give were never counted, only buffs you received. They are read from the aura list of
+  group members and of your target.
+- Forever: a death the recap explains now carries the killer's level when that kind of mob has been seen.
+
 ## 0.3.17
 - Putting on a new piece of gear was never logged on Forever: 52 different items worn over 21 levels and
   not one gear entry. The equip event's second argument was read as "the slot now holds an item", which
