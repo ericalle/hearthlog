@@ -180,6 +180,23 @@ M.Fire("PARTY_KILL", DAN, x); M.Advance(5)
 return c.kills, c.grayKills, #kills()''')
 assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
 
+# ---- 0.3.19 ----
+# Forever: a fight with damage taken and none dealt is still read, and two of them in a row both count
+taken, hurt, fights_read = run(True, '''
+local function runThrough(id, amount)
+    M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(26)
+    M.meter = { dur = 26, [0] = {},
+        [7] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = amount, me = true,
+                  spells = { { id = 6603, total = amount, unit = "Vile Fin Oracle" } } } } }
+    M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 0); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+end
+local before = ns.char.counters.meterFights
+runThrough(0, 351); runThrough(0, 351)
+local fight
+for _, e in ipairs(ns.char.events) do if e.k == "FIGHT" then fight = e end end
+return ns.char.counters.damageTaken, ns.char.tallies.hurtBy["Vile Fin Oracle"].d, ns.char.counters.meterFights - before''')
+assert (taken, hurt, fights_read) == (702, 702, 2), (taken, hurt, fights_read)
+
 # ---- 0.3.18 ----
 # Inside an instance the game hides what you target and who died. The kills are still counted; the names come
 # from the meter when the fight has been read, the fight keeps its list of enemies, and what was hidden is noted.

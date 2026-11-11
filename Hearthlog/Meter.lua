@@ -111,7 +111,8 @@ local function ReadFight(fightEvent, fightDur)
     if not ns.Tbl(dmg.combatSources) then return false end
     local dur = Num(dmg.durationSeconds)
     if dur == nil then return false end -- still secret
-    if #dmg.combatSources == 0 then return true end -- nothing was recorded for this combat
+    -- No damage sources does not mean nothing happened: a fight you ran through without hitting back still
+    -- has damage taken and healing, and those are read below.
 
     -- The same fight must not be counted twice: fingerprint it
     local me, meGUID = nil, nil
@@ -134,13 +135,15 @@ local function ReadFight(fightEvent, fightDur)
     if meGUID == nil then meGUID = myGUID end
     if ns.debug then ns.Print(string.format("meter: %d sources, me=%s, dur=%d", #sources, me and "yes" or "no", dur)) end
     local key = string.format("%s|%d|%d|%d", tostring(sessionID or "?"), math.floor(dur), math.floor(groupTotal), #sources)
+    -- With no damage dealt there is nothing in the fingerprint to tell two fights apart, so the time goes in
+    if #sources == 0 then key = key .. "|" .. tostring(fightEvent and fightEvent.t or Now()) end
     if key == lastKey then return true end
     lastKey = key
 
     local myDamage = me and Num(me.totalAmount) or 0
+    local gotSomething = #sources > 0 -- a fight counts as read once any view had something in it
     Count("damageDone", myDamage)
-    Count("meterFights")
-    if fightEvent then
+    if fightEvent and gotSomething then
         fightEvent.done = myDamage
         if #sources > 1 and groupTotal > 0 then fightEvent.share = math.floor(myDamage * 100 / groupTotal + 0.5) end
     end
@@ -236,6 +239,7 @@ local function ReadFight(fightEvent, fightDur)
             if isMe then
                 guid = guid or myGUID
                 Count("healingDone", total)
+                if total > 0 then gotSomething = true end
                 if fightEvent then fightEvent.healed = total end
                 local det = ns.Tbl(guid and Source(T.HealingDone, guid))
                 if det and ns.Tbl(det.combatSpells) then
@@ -276,6 +280,7 @@ local function ReadFight(fightEvent, fightDur)
             if isMe then
                 local total = Num(src.totalAmount) or 0
                 Count("damageTaken", total)
+                if total > 0 then gotSomething = true end
                 if fightEvent then fightEvent.taken = total end
                 guid = guid or myGUID
                 local det = ns.Tbl(guid and Source(T.DamageTaken, guid))
@@ -333,6 +338,7 @@ local function ReadFight(fightEvent, fightDur)
             end
         end
     end
+    if gotSomething then Count("meterFights") end
     return true
 end
 

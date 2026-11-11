@@ -1,5 +1,13 @@
 # Hearthlog changelog
 
+## 0.3.19
+Checked against the game's own combat log for one evening: 11 of 11 kills with the right names, and damage
+done, damage taken and healing matched the log to the point in every fight that could be compared.
+- A fight you ran through without hitting back was skipped entirely, so the damage you took in it was
+  never counted (351 of the evening's 1,732). The read stopped when the meter had no damage dealt.
+- Known limit, not fixed: the game's meter only covers combat. A heal cast after the fight ends, or a
+  poison still ticking, is in the combat log but not in the meter, so it is not counted here either.
+
 ## 0.3.18
 Found by checking every kind of entry against a real Forever data file, not just the ones that looked wrong.
 - Dungeons on Forever: none of the 197 kills from two dungeon nights has a name, a level or a creature id,
