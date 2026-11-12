@@ -157,6 +157,7 @@ end)
 -- that gets no XP within two seconds still counts: a kill when the blow was ours, an assist when it was
 -- a party member's and the mob had us on its threat list.
 local blows = {} -- oldest first: { guid, mine }
+local recentFoe = nil -- the one kind of enemy in the fight just read, for a kill logged a moment later: { n, id, t }
 local function NoXPBlow(b)
     for i, q in ipairs(blows) do
         if q == b then
@@ -209,13 +210,17 @@ function ns.KillFromXP(gain)
     lastXPKillT = Now()
     local e = { xp = gain }
     if h then e.n, e.lvl, e.npc, e.elite, e.rare = h.n, h.lvl, h.npc, h.elite, h.rare end
+    if not e.n and recentFoe and Now() - recentFoe.t <= 3 then e.n, e.npc = recentFoe.n, recentFoe.id end
     if IsInGroup() then e.group = true end
     if b and b.mine then
         Count("kills") -- our own killing blow, grouped or not
     elseif IsInGroup() then
         -- A party member's kill (or one with no blow reported): an assist when it had us on its threat
-        -- list, the meter saw us damage it, or we are in the fight ourselves
-        if (b and h.threat) or (e.n and ns.EngagedRecently(e.n)) or ns.InCombat() then
+        -- list, the meter saw us damage it, or we are in the fight ourselves. "In the fight" includes the
+        -- moment after it: the last mob of a pull dies as combat ends, and this runs half a second after
+        -- its XP, so asking only "in combat right now" filed the last kill of every pull, bosses among
+        -- them, as a kill we had no part in.
+        if (b and h.threat) or (e.n and ns.EngagedRecently(e.n)) or ns.InCombat() or ns.SinceCombat() <= 4 then
             e.assist = true
             Count("assists")
         else
@@ -238,6 +243,7 @@ function ns.NameKills(foes, since)
         if f.id and f.n then npcNames[f.id] = f.n end
     end
     local only = (#foes == 1 and foes[1].n) and foes[1] or nil
+    recentFoe = only and { n = only.n, id = only.id, t = Now() } or nil
     local events = ns.char and ns.char.events
     if not events or not since then return end
     for i = #events, 1, -1 do
@@ -354,7 +360,12 @@ function ns.ImproveDeath(e)
     e.by, e.guess, e.recap = who, nil, true
     e.spell, e.amt = ns.Str(last.spellName), ns.Num(last.amount)
     e.npc, e.lvl, e.pvp = nil, nil, nil
-    if guid and guid:sub(1, 6) == "Player" then
+    local first = ns.PlayerName(who)
+    if guid and guid:sub(1, 6) == "Player" and first
+        and ((UnitInParty and Yes(UnitInParty(first))) or (UnitInRaid and Yes(UnitInRaid(first)))) then
+        -- Someone in your own group, turned on you by a boss: not a PvP death
+        e.by, e.friendly = first, true
+    elseif guid and guid:sub(1, 6) == "Player" then
         e.pvp = true
         Count("pvpDeaths")
         ns.Tally("killedByPlayers", Short(who), Short(who))

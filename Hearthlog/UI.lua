@@ -105,6 +105,9 @@ local function EventLine(e)
     elseif k == "GZ" then return string.format("%s said gz.", e.who or "someone")
     elseif k == "DUEL" then return string.format("Duel with %s%s.", e.who or "?", e.won == true and ": won" or e.won == false and ": lost" or "")
     elseif k == "SKILL" then return string.format("%s reached %d.", e.n or "?", e.v or 0)
+    elseif k == "BOSS" then
+        if e.win then return string.format("Defeated %s%s.", e.n or "a boss", e.dur and (" in " .. ns.Duration(e.dur)) or "") end
+        return string.format("Wiped on %s.", e.n or "a boss")
     elseif k == "TALENT" then return string.format("Talent: %s%s.", e.n or "?", (e.v or 1) > 1 and (" (rank " .. e.v .. ")") or "")
     elseif k == "XP" then return string.format("+%d xp (%s).", e.v or 0, e.src or "")
     elseif k == "FIGHT" then

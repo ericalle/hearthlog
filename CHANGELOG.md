@@ -1,5 +1,25 @@
 # Hearthlog changelog
 
+## 0.3.20
+From the first dungeon run since kills were named from the meter (Shadowfang Keep, five players).
+- The last mob of every pull was filed as a kill you had no part in, with no entry in the log. It dies as
+  combat ends, and the check that asked "are you in the fight" ran half a second later. In the dungeon
+  19 of 64 pulls have no kill in the log at all, three bosses among them. Being in the fight now includes
+  the moment after it.
+- Boss fights are logged by name, won or lost, with how long they took. The game announces them even
+  where it hides everything else.
+- A boss that turns a player on the group (Arugal) made that player show up as an enemy, the boss show up
+  as one of the group's damage dealers, and dying to the player count as a PvP death. All three are
+  recognised for what they are.
+- A kill logged just after its fight was read still gets its name when the fight had one kind of enemy.
+- Errors the addon catches are kept in the saved file (up to 40, by version), so a bad night can be read
+  afterwards and not only while the session lasts.
+- `/hl logging` turns the game's own combat log file on and keeps turning it on at every login. The game
+  forgets `/combatlog` when it restarts.
+- What the dungeon showed about the game: inside an instance your target's name was hidden 1,532 times
+  out of 1,646 and the kill event 145 times out of 146, while the meter's list of enemies was readable
+  every time. Who healed whom is not available on Forever at all, also with healers in the group.
+
 ## 0.3.19
 Checked against the game's own combat log for one evening: 11 of 11 kills with the right names, and damage
 done, damage taken and healing matched the log to the point in every fight that could be compared.

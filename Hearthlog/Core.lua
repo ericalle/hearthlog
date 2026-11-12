@@ -35,6 +35,7 @@ local DEFAULT_COUNTERS = {
     maxHitDone = 0, maxHitTaken = 0, dodged = 0, parried = 0, partyKills = 0, damageDone = 0, healingTaken = 0,
     duelRequests = 0, partyInvites = 0, pvpKills = 0, pvpDeaths = 0, honorKills = 0, rezzes = 0, binds = 0,
     screenshots = 0, petDeaths = 0, petDamage = 0, rolls = 0, rollsWon = 0, trades = 0, mailSent = 0, mailItemsIn = 0,
+    bossKills = 0,
     ahBids = 0, ahBuyouts = 0, ahSpent = 0, ahPosted = 0, ahSold = 0, ahSoldGold = 0,
     interrupts = 0, dispels = 0, absorbs = 0, overkill = 0, meterFights = 0, appearances = 0,
     avoidableTaken = 0, mounts = 0, pets = 0, toys = 0, achievements = 0, rep = 0, grayKills = 0,
@@ -94,6 +95,7 @@ local DEFAULT_SETTINGS = {
     levelSummary = false,  -- a chat line on each level-up
     countJumps = true,
     gearSnapshot = true,
+    combatLog = false,     -- /hl logging: turn the game's own combat log file on at every login
 }
 
 local function InitDB()
@@ -463,6 +465,12 @@ SlashCmdList.HEARTHLOG = function(msg)
         if ns.MeterDump then ns.MeterDump() else Print("no damage meter on this client") end
     elseif cmd == "talents" then
         if ns.TalentDump then ns.TalentDump() end
+    elseif cmd == "logging" then
+        -- The game forgets /combatlog when it restarts. With this on, the log file is started at each login.
+        if type(LoggingCombat) ~= "function" then Print("this client has no combat log file") return end
+        ns.db.settings.combatLog = not ns.db.settings.combatLog
+        ns.Call("LoggingCombat", ns.db.settings.combatLog)
+        Print("combat log file " .. (ns.db.settings.combatLog and "on, and on again at every login (it is written to the game's Logs folder)" or "off"))
     elseif cmd == "debug" then
         ns.debug = not ns.debug
         Print("debug " .. (ns.debug and "on" or "off"))
@@ -492,6 +500,7 @@ ns.On("PLAYER_LOGIN", function()
 end)
 
 ns.On("PLAYER_ENTERING_WORLD", function(isLogin, isReload)
+    if ns.Setting("combatLog") and type(LoggingCombat) == "function" then ns.Call("LoggingCombat", true) end
     if not entered then
         entered = true
         OpenSession(isReload)

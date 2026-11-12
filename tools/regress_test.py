@@ -180,6 +180,95 @@ M.Fire("PARTY_KILL", DAN, x); M.Advance(5)
 return c.kills, c.grayKills, #kills()''')
 assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
 
+# ---- 0.3.20 ----
+# Forever, grouped: the last mob of a pull dies as combat ends. It is an assist with an entry in the log, not a
+# kill you had no part in, and when the fight had one kind of enemy it gets that name even though it is logged
+# just after the fight is read.
+assists, party_kills, names = run(True, '''
+M.inInstance = true
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(30)
+M.meter = { dur = 30,
+    [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 300, me = true }, { guid = "Player-1-000002", name = "Danwar the Bold", total = 900 } },
+    [10] = { { creatureID = 3887, name = "Baron Silverlaine", total = 4230 } } }
+M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 1); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(0.3)
+M.xp = M.xp + 131; M.Fire("PLAYER_XP_UPDATE"); M.Advance(3)
+local names = {}
+for _, e in ipairs(ns.char.events) do if e.k == "KILL" then names[#names + 1] = tostring(e.n) .. (e.assist and " (assist)" or "") end end
+return ns.char.counters.assists, ns.char.counters.partyKills, table.concat(names, ",")''')
+assert (assists, party_kills, names) == (1, 0, "Baron Silverlaine (assist)"), (assists, party_kills, names)
+
+# Forever: a boss that turns a player on the group appears among the damage dealers and the player among the
+# enemies. Neither is what it looks like, and dying to that player is not a PvP death.
+group, share, foes, hit, death, pvp = run(True, '''
+M.inInstance = true
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(30)
+M.meter = { dur = 30,
+    [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 100, me = true },
+            { guid = "Player-1-000002", name = "Danwar the Bold", total = 300 },
+            { guid = "Creature-0-1-0-1-4275-0001", creatureID = 4275, name = "Archmage Arugal", total = 600 } },
+    [9] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 1, me = true, recap = 90 } },
+    [10] = { { creatureID = 4275, name = "Archmage Arugal", total = 400, spells = { { id = 1, total = 100, unit = "Zinther Unbroken" } } },
+             { name = "Danwar the Bold", total = 55 } } }
+M.recaps[90] = { { timestamp = 3, sourceName = "Danwar the Bold", sourceGUID = "Player-1-000002", spellName = "Cleave", amount = 38 } }
+M.Fire("PLAYER_DEAD"); M.Advance(1)
+M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 2); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(4)
+local fight, death
+for _, e in ipairs(ns.char.events) do if e.k == "FIGHT" then fight = e end if e.k == "DEATH" then death = e end end
+local group = {}
+for name in pairs(ns.char.tallies.groupDmg) do group[#group + 1] = name end
+local hit = {}
+for name in pairs(ns.char.tallies.damageTo) do hit[#hit + 1] = name end
+return table.concat(group, ","), fight.share, #fight.foes, table.concat(hit, ","), death.by .. (death.friendly and " (friendly)" or ""), ns.char.counters.pvpDeaths''')
+assert (group, share, foes, hit, death, pvp) == ("Danwar", 25, 1, "Archmage Arugal", "Danwar (friendly)", 0), (group, share, foes, hit, death, pvp)
+
+for forever in (False, True):
+    # Boss fights are logged by name, won or lost
+    bosses, kills = run(forever, '''
+M.Fire("ENCOUNTER_START", 1069, "Baron Silverlaine", 1, 5); M.Advance(35)
+M.Fire("ENCOUNTER_END", 1069, "Baron Silverlaine", 1, 5, 1)
+M.Fire("ENCOUNTER_START", 1073, "Archmage Arugal", 1, 5); M.Advance(100)
+M.Fire("ENCOUNTER_END", 1073, "Archmage Arugal", 1, 5, 0)
+local out = {}
+for _, e in ipairs(ns.char.events) do if e.k == "BOSS" then out[#out + 1] = e.n .. ":" .. tostring(e.win) .. ":" .. tostring(e.dur) end end
+return table.concat(out, ","), ns.char.counters.bossKills''')
+    assert (bosses, kills) == ("Baron Silverlaine:true:35,Archmage Arugal:nil:100", 1), (bosses, kills)
+
+    # An error the addon catches is kept in the saved file, counted, under the version that had it
+    n, count = run(forever, '''
+ns.On("PLAYER_STARTED_MOVING", function() error("boom") end)
+M.Fire("PLAYER_STARTED_MOVING"); M.Fire("PLAYER_STARTED_MOVING")
+local n, count = 0, 0
+for key, rec in pairs(HearthlogDB.errors or {}) do
+    if key:find(ns.VERSION, 1, true) == 1 and key:find("boom", 1, true) then n = n + 1; count = rec.n end
+end
+ns.errorCount, ns.errors = 0, {} -- the two errors were the point; the harness would stop on them
+return n, count''')
+    assert (n, count) == (1, 2), (n, count)
+
+    # /hl logging turns the game's combat log file on, and keeps turning it on at login
+    now, saved, at_login = run(forever, '''
+for _, slash in pairs(SlashCmdList) do slash("logging") end
+local now, saved = M.logging, HearthlogDB.settings.combatLog
+M.logging = false
+M.Fire("PLAYER_ENTERING_WORLD", true, false)
+return now, saved, M.logging''')
+    assert (now, saved, at_login) == (True, True, True), (now, saved, at_login)
+
+# Forever: XP that cannot be read for a moment is not an error, and nothing is lost when it can be read again
+errors, kills, xp = run(True, '''
+M.Fire("PLAYER_REGEN_DISABLED")
+local real = UnitXP
+_G.UnitXP = function() return M.SECRET end
+M.xp = M.xp + 40; M.Fire("PLAYER_XP_UPDATE"); M.Advance(1)
+_G.UnitXP = real
+M.xp = M.xp + 60; M.Fire("PLAYER_XP_UPDATE"); M.Advance(2)
+local n, last = 0, nil
+for _, e in ipairs(ns.char.events) do if e.k == "KILL" then n = n + 1; last = e end end
+return ns.errorCount, n, last.xp''')
+assert (errors, kills, xp) == (0, 1, 100), (errors, kills, xp)
+
 # ---- 0.3.19 ----
 # Forever: a fight with damage taken and none dealt is still read, and two of them in a row both count
 taken, hurt, fights_read = run(True, '''

@@ -46,6 +46,7 @@ newer version, and `/hl who` shows who has it.
 | `/hl diag` | Which client this is, which files loaded and which game functions exist |
 | `/hl meter` | What the game's damage meter holds for the last fight (Forever and Retail) |
 | `/hl talents` | Which talent functions this client has and what they return |
+| `/hl logging` | Turns the game's own combat log file on, and on again at every login |
 | `/hl reset confirm` | Erase this character's journey |
 
 ## Where the data is

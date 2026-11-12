@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.19"
+ns.VERSION = "0.3.20"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -247,6 +247,20 @@ function ns.NoteError(where, err)
     local list = ns.errors
     list[#list + 1] = tostring(where) .. ": " .. tostring(err)
     if #list > 20 then table.remove(list, 1) end
+    -- Also kept in the saved file, by version, so what went wrong in a session can be read afterwards:
+    -- up to 40 different errors, each with how often and when last
+    local db = ns.db
+    if db then
+        db.errors = db.errors or {}
+        local key = (ns.VERSION or "?") .. " " .. tostring(where) .. ": " .. tostring(err):sub(1, 200)
+        local rec = db.errors[key]
+        if not rec then
+            local n = 0
+            for _ in pairs(db.errors) do n = n + 1 end
+            if n < 40 then rec = { n = 0 }; db.errors[key] = rec end
+        end
+        if rec then rec.n = rec.n + 1; rec.t = ns.Now and ns.Now() or nil end
+    end
     if ns.debug then ns.Print("error in " .. tostring(where) .. ": " .. tostring(err)) end
 end
 function ns.Guard(where, fn)

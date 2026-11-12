@@ -40,6 +40,7 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   GUILD      n=guild name or nil when left
 --   GZ         who=, chan=
 --   WIPE       inst=name, party={..}
+--   BOSS       n=encounter name, id=encounter id, win=true when it died, dur=seconds, party={..}
 -- All carry t (server time) and, when known, m/x/y (map and position) and z (zone name).
 
 local playerGUID
@@ -257,7 +258,9 @@ local function Recent(e, window)
 end
 
 ns.On("PLAYER_XP_UPDATE", function()
-    local xp = UnitXP("player")
+    if ns.InstNote then ns.InstNote("xp", UnitXP("player")) end
+    local xp = ns.Num(UnitXP("player"))
+    if not xp then return end -- hidden for now: the next readable update carries the whole gain
     local max = ns.Num(Call("UnitXPMax", "player"))
     local lvl = ns.level
     if lastXP == nil then lastXP, lastXPMax, lastXPLevel = xp, max, lvl return end
@@ -821,6 +824,24 @@ ns.On("PLAYER_ENTERING_WORLD", function() ns.After(5, GearChanged) end)
 -- ---------------------------------------------------------
 -- Spells, skills, reputation
 -- ---------------------------------------------------------
+-- Boss fights. The game announces the start and end of each one by name, also inside instances where
+-- most other names are hidden.
+local encounterT = {}
+ns.On("ENCOUNTER_START", function(id)
+    id = ns.Num(id)
+    if id then encounterT[id] = Now() end
+end)
+ns.On("ENCOUNTER_END", function(id, name, _, _, success)
+    id, name = ns.Num(id), ns.Str(name)
+    if not name then return end
+    local won = not ns.IsSecret(success) and (success == 1 or success == true)
+    local started = id and encounterT[id]
+    if id then encounterT[id] = nil end
+    if won then Count("bossKills") end
+    Event("BOSS", { n = name, id = id, win = won or nil, dur = started and (Now() - started) or nil,
+        party = #party > 0 and ns.CopyArray(party) or nil })
+end)
+
 -- Spells learned. The event was renamed on the modern client and the old name never fires there, so both
 -- are listened for, and a spell reported under both counts once.
 local learnedSpells = {}

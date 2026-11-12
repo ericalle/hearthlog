@@ -97,6 +97,15 @@ local function Plain(roster, name, guid)
     end
     return ns.PlayerName(short) -- not in the group any more: still filed under the first name
 end
+-- Is this meter name you or someone in your group?
+local function InGroup(roster, name, guid)
+    if guid and roster.byGuid[guid] then return true end
+    local plain = Plain(roster, name)
+    for _, n in ipairs(roster.names) do
+        if n == plain then return true end
+    end
+    return false
+end
 
 -- Returns true when done (data read, or nothing to read), false to retry (still secret)
 local function ReadFight(fightEvent, fightDur)
@@ -124,14 +133,19 @@ local function ReadFight(fightEvent, fightDur)
         local total = Num(src.totalAmount)
         if total == nil then return false end
         local guid = Str(src.sourceGUID)
-        local name = Plain(roster, Str(src.name), guid)
-        local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName)
-        tinsert(sources, { name = name, guid = guid, total = total, me = isMe })
-        groupTotal = groupTotal + total
-        if isMe then me, meGUID = src, guid end
+        -- A boss that turns a player on the group is listed among the damage dealers. It is not one of us:
+        -- it stays out of the group's total, the shares and the group list.
+        local creature = (Num(src.sourceCreatureID) or 0) > 0 or (guid ~= nil and guid:sub(1, 6) ~= "Player")
+        if not creature then
+            local name = Plain(roster, Str(src.name), guid)
+            local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName)
+            tinsert(sources, { name = name, guid = guid, total = total, me = isMe, src = src })
+            groupTotal = groupTotal + total
+            if isMe then me, meGUID = src, guid end
+        end
     end
     -- Alone with a single source and no way to tell: it is us
-    if not me and #sources == 1 and not IsInGroup() then me, meGUID = dmg.combatSources[1], sources[1].guid; sources[1].me = true end
+    if not me and #sources == 1 and not IsInGroup() then me, meGUID = sources[1].src, sources[1].guid; sources[1].me = true end
     if meGUID == nil then meGUID = myGUID end
     if ns.debug then ns.Print(string.format("meter: %d sources, me=%s, dur=%d", #sources, me and "yes" or "no", dur)) end
     local key = string.format("%s|%d|%d|%d", tostring(sessionID or "?"), math.floor(dur), math.floor(groupTotal), #sources)
@@ -189,7 +203,9 @@ local function ReadFight(fightEvent, fightDur)
         if ns.InstNote then ns.InstNote("foeName", src.name); ns.InstNote("foeId", src.sourceCreatureID) end
         local foe, id, total = Str(src.name), Num(src.sourceCreatureID), Num(src.totalAmount)
         if foe == "" then foe = nil end
-        if total and total > 0 and (foe or id) then
+        -- The same boss trick from the other side: the player it turned is listed among the enemies
+        local ours = id == nil and foe ~= nil and InGroup(roster, foe, Str(src.sourceGUID))
+        if total and total > 0 and (foe or id) and not ours then
             local part = nil
             if #sources == 1 and not IsInGroup() then
                 part = total
