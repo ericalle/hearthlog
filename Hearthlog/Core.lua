@@ -76,11 +76,21 @@ function ns.On(event, fn)
     tinsert(handlers[event], fn)
 end
 
+-- Chat lines: inside an instance the game can hide the text and who it is from. A hidden value may not be
+-- read at all, not even to ask what type it is, so the handlers get nothing in its place and treat that
+-- part of the line as absent.
+local function Unhidden(a, b, c, d, e, ...)
+    local S = ns.IsSecret
+    return (not S(a)) and a or nil, (not S(b)) and b or nil, (not S(c)) and c or nil, (not S(d)) and d or nil,
+        (not S(e)) and e or nil, ...
+end
 frame:SetScript("OnEvent", function(_, event, ...)
     local list = handlers[event]
     if not list then return end
+    local chat = event:sub(1, 9) == "CHAT_MSG_"
     for _, fn in ipairs(list) do
-        local ok, err = pcall(fn, ...)
+        local ok, err
+        if chat then ok, err = pcall(fn, Unhidden(...)) else ok, err = pcall(fn, ...) end
         if not ok then ns.NoteError(event, err) end
     end
 end)

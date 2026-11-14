@@ -180,6 +180,115 @@ M.Fire("PARTY_KILL", DAN, x); M.Advance(5)
 return c.kills, c.grayKills, #kills()''')
 assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
 
+# ---- 0.3.21 ----
+# Forever, grouped: the meter's session belongs to the group. Your own combat can stop and start while it runs
+# on, and a second read shows totals since the session began. Only what is new counts, the second fight's own
+# numbers are its own, and the next real session counts in full.
+done, danwar, second, cont, foes, total3 = run(True, '''
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+local function read(dur, mine, his, foes)
+    M.meter = { dur = dur,
+        [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = mine, me = true }, { guid = "Player-1-000002", name = "Danwar the Bold", total = his } },
+        [10] = foes }
+    M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 0); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+end
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(31)
+read(31, 1502, 6000, { { creatureID = 657, name = "Defias Pirate", total = 5378 }, { creatureID = 3947, name = "Goblin Shipbuilder", total = 1716 } })
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(19)
+read(53, 2447, 9500, { { creatureID = 657, name = "Defias Pirate", total = 5378 }, { creatureID = 3947, name = "Goblin Shipbuilder", total = 3432 },
+    { creatureID = 1732, name = "Defias Squallshaper", total = 1716 } })
+local c, t = ns.char.counters, ns.char.tallies
+local done, danwar = c.damageDone, t.groupDmg.Danwar.d
+local fight
+for _, e in ipairs(ns.char.events) do if e.k == "FIGHT" then fight = e end end
+local names = {}
+for _, f in ipairs(fight.foes) do names[#names + 1] = f.n .. " " .. f.d end
+table.sort(names)
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(26)
+read(26, 1570, 4000, { { creatureID = 657, name = "Defias Pirate", total = 3432 } })
+return done, danwar, fight.done, fight.cont, table.concat(names, ", "), c.damageDone''')
+assert (done, danwar, second, cont, foes, total3) == (2447, 9500, 945, True, "Defias Squallshaper 1716, Goblin Shipbuilder 1716", 4017), \
+    (done, danwar, second, cont, foes, total3)
+
+# Forever: kills in a dungeon are counted from the meter when you leave. Two pulls of pirates (one, then three),
+# a boss that wipes the group once and then dies, a companion pack: 6 kills by the count, of which XP showed 2.
+kills, by_xp, mobs, assists, line = run(True, '''
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+M.inInstance, M.instanceName = true, "Deadmines"
+M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(3)
+local session = 0
+local function pull(seconds, foes, xp)
+    M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(seconds)
+    for i = 1, xp or 0 do M.xp = M.xp + 82; M.Fire("PLAYER_XP_UPDATE"); M.Advance(1) end
+    session = session + 1
+    M.meter = { dur = seconds + (xp or 0),
+        [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 400 + session, me = true }, { guid = "Player-1-000002", name = "Danwar the Bold", total = 900 } },
+        [10] = foes }
+    M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 0); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(20)
+end
+local function pirates(d) return { creatureID = 657, name = "Defias Pirate", total = d, extra = { classification = "elite" } } end
+pull(20, { pirates(1716) }, 1)
+pull(40, { pirates(5274), { creatureID = 3450, name = "Defias Companion", total = 425 } }, 1)
+M.Fire("ENCOUNTER_START", 2746, "Cookie", 1, 5)
+pull(25, { { creatureID = 645, name = "Cookie", total = 900, extra = { classification = "elite" } } })
+M.Fire("ENCOUNTER_END", 2746, "Cookie", 1, 5, 0)
+M.Fire("ENCOUNTER_START", 2746, "Cookie", 1, 5)
+pull(30, { { creatureID = 645, name = "Cookie", total = 3804, extra = { classification = "elite" } } })
+M.Fire("ENCOUNTER_END", 2746, "Cookie", 1, 5, 1)
+local before = ns.char.counters.assists
+M.inInstance, M.instanceName = false, nil
+M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(3)
+local out
+for _, e in ipairs(ns.char.events) do if e.k == "INST_OUT" then out = e end end
+local mobs = {}
+for n, k in pairs(out.mobs) do mobs[#mobs + 1] = n .. " " .. k end
+table.sort(mobs)
+ns.ToggleUI(); ns.ShowTab("combat"); M.Advance(3)
+return out.kills, out.xpk, table.concat(mobs, ", "), ns.char.counters.assists - before, ns.EventLine and ns.EventLine(out) or ""''')
+assert (kills, by_xp, mobs, assists) == (6, 2, "Cookie 1, Defias Companion 1, Defias Pirate 4", 4), (kills, by_xp, mobs, assists, line)
+
+# Forever: chat the game hides (text, sender or both) is no error, your own messages are counted where they are
+# sent, and a whisper counts too
+errors, messages, chans = run(True, '''
+M.Fire("CHAT_MSG_PARTY", M.SECRET, M.SECRET, "", "", M.SECRET)
+M.Fire("CHAT_MSG_SKILL", M.SECRET)
+M.Fire("CHAT_MSG_LOOT", M.SECRET, M.SECRET)
+M.Fire("CHAT_MSG_SYSTEM", M.SECRET)
+M.Fire("CHAT_MSG_WHISPER", M.SECRET, M.SECRET)
+SendChatMessage("pull", "PARTY"); M.Advance(1)
+SendChatMessage("omw", "WHISPER", nil, "Danwar"); M.Advance(1)
+SendChatMessage("hello"); M.Advance(1)
+M.Fire("CHAT_MSG_PARTY", "pull", "Zinther Unbroken") -- the line that comes back must not count again
+local chans = {}
+for k, v in pairs(ns.char.tallies.chat) do chans[#chans + 1] = k .. "=" .. v.n end
+table.sort(chans)
+return ns.errorCount, ns.char.counters.messages, table.concat(chans, " ")''')
+assert (errors, messages, chans) == (0, 3, "party=1 say=1 whisper=1"), (errors, messages, chans)
+
+for forever in (False, True):
+    # The game sends the honorable-kill event twice for one kill
+    honor, events = run(forever, '''
+M.Fire("PLAYER_PVP_KILLS_CHANGED"); M.Fire("PLAYER_PVP_KILLS_CHANGED"); M.Advance(5)
+M.Fire("PLAYER_PVP_KILLS_CHANGED"); M.Fire("PLAYER_PVP_KILLS_CHANGED")
+local n = 0
+for _, e in ipairs(ns.char.events) do if e.k == "PVP_KILL" then n = n + 1 end end
+return ns.char.counters.honorKills, n''')
+    assert (honor, events) == (2, 2 if forever else 0), (honor, events)
+
+# Forever: a creature whose name has not loaded is "Unknown" to the game. It is kept by its id, never under that name.
+named, has_id, kill = run(True, '''
+M.inInstance = true
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(30)
+M.xp = M.xp + 332; M.Fire("PLAYER_XP_UPDATE"); M.Advance(1)
+M.meter = { dur = 31, [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 300, me = true } },
+    [10] = { { creatureID = 643, name = "Unknown", total = 3087 } } }
+M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 0); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+local fight, kill
+for _, e in ipairs(ns.char.events) do if e.k == "FIGHT" then fight = e end if e.k == "KILL" then kill = e end end
+return fight.foes[1].n, fight.foes[1].id, kill.n''')
+assert (named, has_id, kill) == (None, 643, None), (named, has_id, kill)
+
 # ---- 0.3.20 ----
 # Forever, grouped: the last mob of a pull dies as combat ends. It is an assist with an entry in the log, not a
 # kill you had no part in, and when the fight had one kind of enemy it gets that name even though it is logged

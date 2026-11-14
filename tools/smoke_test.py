@@ -341,6 +341,7 @@ M.money = M.money - 37
 fire("PLAYER_MONEY")
 DoEmote("DANCE") -- /dance; in chat it reads "You burst into dance."
 fire("CHAT_MSG_TEXT_EMOTE", "You burst into dance.", "Zinther")
+SendChatMessage("hello", "SAY") -- what you send is counted at the call; the line that comes back is not
 fire("CHAT_MSG_SAY", "hello", "Zinther")
 fire("CHAT_MSG_SAY", "hi back", "Reidoo")
 

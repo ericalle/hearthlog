@@ -92,7 +92,9 @@ local function EventLine(e)
     elseif k == "ZONE" then return string.format("Entered %s.", e.n or "?")
     elseif k == "DISCOVER" then return string.format("Discovered %s.", e.n or "?")
     elseif k == "INST_IN" then return string.format("Entered %s.", e.n or "an instance")
-    elseif k == "INST_OUT" then return string.format("Left %s after %dm.", e.n or "the instance", (e.dur or 0) / 60)
+    elseif k == "INST_OUT" then
+        return string.format("Left %s after %dm%s.", e.n or "the instance", (e.dur or 0) / 60,
+            (e.kills or 0) > 0 and (", " .. e.kills .. " kills") or "")
     elseif k == "PARTY" then
         local parts = {}
         if e.add then for _, m in ipairs(e.add) do tinsert(parts, (m:match("^([^:]+)")) .. " joined") end end
@@ -253,9 +255,21 @@ function CONTENT.combat()
     if c.absorbs > 0 then tinsert(rows, { "Absorbs", tostring(c.absorbs) }) end
 
     local lines = { { title = "MOST KILLED" } }
-    local kills = {}
+    -- A dungeon run has its own count by kind (from the meter); the few kills logged one by one inside it
+    -- are part of that count and are not added again
+    local kills, runs = {}, {}
     for _, e in ipairs(ns.char.events) do
-        if e.k == "KILL" and e.n then kills[e.n] = (kills[e.n] or 0) + 1 end
+        if e.k == "INST_OUT" and e.mobs and e.from then
+            tinsert(runs, e)
+            for n, k in pairs(e.mobs) do kills[n] = (kills[n] or 0) + k end
+        end
+    end
+    local ri = 1
+    for _, e in ipairs(ns.char.events) do
+        if e.k == "KILL" and e.n then
+            while runs[ri] and e.t > runs[ri].t do ri = ri + 1 end
+            if not (runs[ri] and e.t >= runs[ri].from) then kills[e.n] = (kills[e.n] or 0) + 1 end
+        end
     end
     local list = {}
     for n, k in pairs(kills) do tinsert(list, { n = n, k = k }) end

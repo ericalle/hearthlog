@@ -48,6 +48,7 @@ local function See(unit)
     if not Yes(UnitCanAttack("player", unit)) or Yes(UnitIsPlayer(unit)) then return nil end
     local name, guid = ns.Str(UnitName(unit)), ns.Str(UnitGUID(unit))
     if not name or not guid then return nil end
+    if name == "Unknown" or name == UNKNOWNOBJECT then return nil end -- not loaded yet: the game's placeholder
     local h = seen[guid]
     if not h then
         if seenN >= 300 then seen, seenN = {}, 0 end
@@ -107,6 +108,7 @@ local function NoteHostileTarget()
     InstNote("targetName", UnitName("target"))
     InstNote("targetGuid", UnitGUID("target"))
     InstNote("targetAttackable", UnitCanAttack("player", "target"))
+    InstNote("targetHealth", UnitHealthMax and UnitHealthMax("target") or nil)
     local h = See("target")
     if not h then return end
     -- On its threat list means we have tagged it (or it has us). Once seen it sticks for that mob:
@@ -301,12 +303,12 @@ local function NotePlayerTarget()
 end
 ns.On("PLAYER_TARGET_CHANGED", NotePlayerTarget)
 ns.On("UNIT_TARGET", function(unit) if unit == "player" then NotePlayerTarget() end end)
-ns.On("PLAYER_PVP_KILLS_CHANGED", function()
+function ns.OnHonorKill() -- called once per kill by the handler in Events.lua
     local who = lastHostilePlayer and (Now() - lastHostilePlayer.t) <= 60 and lastHostilePlayer.n or nil
     Count("pvpKills")
     if who then ns.Tally("pvpKills", who, who) end
     Event("PVP_KILL", { who = who })
-end)
+end
 
 -- Death recap: the game keeps the last hits that killed you. When readable, the guessed killer on the
 -- DEATH event is replaced with the real one. The function moved between builds; all known homes are tried.

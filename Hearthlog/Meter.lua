@@ -59,6 +59,15 @@ end
 local lastKey = nil
 local attempts = 0
 
+-- One meter session can be read more than once. In a group the session belongs to the group: your own
+-- combat can end and start again while it runs on, and every read then shows the totals since the session
+-- began. Counting each read in full counted the earlier part again (about 15% too much damage in a
+-- dungeon). So each number is taken as the difference from the last read of the same session.
+-- A read is of the same session when the session is older than the time since the last read (a new one
+-- cannot be) and nothing in it has gone down.
+local prevSnap, prevDur, prevReadAt = nil, nil, nil
+local function Clock() return (GetTime and GetTime()) or Now() end
+
 -- The meter's own id for the fight it is showing, taken from its update event (type, sessionID). It goes
 -- into the fingerprint below so that two fights with the same length and damage are still two fights.
 local sessionID = nil
@@ -154,20 +163,39 @@ local function ReadFight(fightEvent, fightDur)
     if key == lastKey then return true end
     lastKey = key
 
-    local myDamage = me and Num(me.totalAmount) or 0
+    local myTotal = me and Num(me.totalAmount) or 0
+    local at = Clock()
+    local same = prevSnap ~= nil and dur >= prevDur + (at - prevReadAt) - 3
+        and myTotal >= (prevSnap.dmg or 0) and groupTotal >= (prevSnap.group or 0)
+    local base, snap = same and prevSnap or {}, {}
+    prevSnap, prevDur, prevReadAt = snap, dur, at
+    -- What is new in a total since the last read of this session (all of it, for a new session)
+    local function New(key, total)
+        snap[key] = total
+        local d = total - (base[key] or 0)
+        return d > 0 and d or 0
+    end
+
+    local myDamage = New("dmg", myTotal)
+    local groupDamage = New("group", groupTotal)
     local gotSomething = #sources > 0 -- a fight counts as read once any view had something in it
     Count("damageDone", myDamage)
     if fightEvent and gotSomething then
         fightEvent.done = myDamage
-        if #sources > 1 and groupTotal > 0 then fightEvent.share = math.floor(myDamage * 100 / groupTotal + 0.5) end
+        fightEvent.mdur = math.floor(dur) -- how long the meter's own session had run when it was read
+        if same then fightEvent.cont = true end -- a later stretch of a session read before
+        if #sources > 1 and groupDamage > 0 then fightEvent.share = math.floor(myDamage * 100 / groupDamage + 0.5) end
     end
 
     -- Group members' damage this fight (every source that is not us)
     if #sources > 1 then
         for _, s in ipairs(sources) do
             if not s.me and s.name then
-                local rec = ns.Tally("groupDmg", s.name, s.name)
-                if rec then rec.d = (rec.d or 0) + s.total end
+                local part = New("src:" .. s.name, s.total)
+                if part > 0 then
+                    local rec = ns.Tally("groupDmg", s.name, s.name)
+                    if rec then rec.d = (rec.d or 0) + part end
+                end
             end
         end
     end
@@ -182,14 +210,15 @@ local function ReadFight(fightEvent, fightDur)
             local amt = Num(sp.totalAmount)
             local target = RowUnit(sp)
             if id and amt then
-                AddD("damageBySpell", id, SpellName(id), amt)
+                amt = New("sp:" .. id .. ":" .. (target or ""), amt)
+                if amt > 0 then AddD("damageBySpell", id, SpellName(id), amt) end
                 if target then
                     gotTargets = true
-                    AddD("damageTo", target, target, amt)
+                    if amt > 0 then AddD("damageTo", target, target, amt) end
                     if ns.Engaged then ns.Engaged(target) end
                 end
                 local over = Num(sp.overkillAmount)
-                if over and over > 0 then Count("overkill", over) end
+                if over and over > 0 then Count("overkill", New("over:" .. id .. ":" .. (target or ""), over)) end
             end
         end
     end
@@ -202,7 +231,8 @@ local function ReadFight(fightEvent, fightDur)
     for _, src in ipairs(view and ns.Tbl(view.combatSources) or {}) do
         if ns.InstNote then ns.InstNote("foeName", src.name); ns.InstNote("foeId", src.sourceCreatureID) end
         local foe, id, total = Str(src.name), Num(src.sourceCreatureID), Num(src.totalAmount)
-        if foe == "" then foe = nil end
+        -- "Unknown" is the game's placeholder for a creature whose name has not loaded yet
+        if foe == "" or foe == "Unknown" or foe == UNKNOWNOBJECT then foe = nil end
         -- The same boss trick from the other side: the player it turned is listed among the enemies
         local ours = id == nil and foe ~= nil and InGroup(roster, foe, Str(src.sourceGUID))
         if total and total > 0 and (foe or id) and not ours then
@@ -221,7 +251,12 @@ local function ReadFight(fightEvent, fightDur)
                 end
             end
             local cls = Str(src.classification)
-            tinsert(foes, { n = foe, id = id, d = total, m = part, c = (cls ~= nil and cls ~= "" and cls ~= "normal") and cls or nil })
+            local fkey = tostring(id or foe)
+            total = New("foe:" .. fkey, total)
+            if part then part = New("foe.mine:" .. fkey, part) end
+            if total > 0 then
+                tinsert(foes, { n = foe, id = id, d = total, m = part, c = (cls ~= nil and cls ~= "" and cls ~= "normal") and cls or nil })
+            end
         end
     end
     if not gotTargets and myDamage > 0 then
@@ -234,7 +269,7 @@ local function ReadFight(fightEvent, fightDur)
     end
     if #foes > 0 then
         -- Kills logged during this fight without a name get one from this list
-        if ns.NameKills then ns.NameKills(foes, fightEvent and fightEvent.t and (fightEvent.t - dur - 3) or nil) end
+        if ns.NameKills then ns.NameKills(foes, fightEvent and fightEvent.t and (fightEvent.t - (fightEvent.dur or dur) - 3) or nil) end
         -- A group fight keeps the list (the six biggest): in a dungeon it is the only record of what was
         -- fought, and it says which fights were the bosses
         if fightEvent and (IsInGroup() or (IsInInstance and (IsInInstance()) == true)) then
@@ -254,6 +289,7 @@ local function ReadFight(fightEvent, fightDur)
             local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName)
             if isMe then
                 guid = guid or myGUID
+                total = New("heal", total)
                 Count("healingDone", total)
                 if total > 0 then gotSomething = true end
                 if fightEvent then fightEvent.healed = total end
@@ -262,23 +298,32 @@ local function ReadFight(fightEvent, fightDur)
                     for _, sp in ipairs(det.combatSpells) do
                         local id, amt, target = Num(sp.spellID), Num(sp.totalAmount), Plain(roster, RowUnit(sp))
                         if id and amt then
-                            AddD("healBySpell", id, SpellName(id), amt)
-                            if target and target ~= "" and target ~= myName then AddD("healedTo", target, target, amt) end
+                            amt = New("heal.sp:" .. id .. ":" .. (target or ""), amt)
+                            if amt > 0 then
+                                AddD("healBySpell", id, SpellName(id), amt)
+                                if target and target ~= "" and target ~= myName then AddD("healedTo", target, target, amt) end
+                            end
                         end
                     end
                 end
             elseif name then
-                local rec = ns.Tally("groupHeal", name, name)
-                if rec then rec.d = (rec.d or 0) + total end
+                total = New("heal.src:" .. name, total)
+                if total > 0 then
+                    local rec = ns.Tally("groupHeal", name, name)
+                    if rec then rec.d = (rec.d or 0) + total end
+                end
                 -- Did they heal me? Their per-target breakdown says
                 local det = ns.Tbl(guid and Source(T.HealingDone, guid))
                 if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
                         local amt, target = Num(sp.totalAmount), Plain(roster, RowUnit(sp))
                         if amt and target and myName and target == myName then
-                            AddD("healedBy", name, name, amt)
-                            -- Without per-hit events, the meter is the only source for healing received
-                            if not ns.unitCombatSeen then Count("healingTaken", amt) end
+                            amt = New("heal.by:" .. name .. ":" .. tostring(Num(sp.spellID) or "?"), amt)
+                            if amt > 0 then
+                                AddD("healedBy", name, name, amt)
+                                -- Without per-hit events, the meter is the only source for healing received
+                                if not ns.unitCombatSeen then Count("healingTaken", amt) end
+                            end
                         end
                     end
                 end
@@ -294,7 +339,7 @@ local function ReadFight(fightEvent, fightDur)
             local name = Plain(roster, Str(src.name), guid)
             local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName)
             if isMe then
-                local total = Num(src.totalAmount) or 0
+                local total = New("taken", Num(src.totalAmount) or 0)
                 Count("damageTaken", total)
                 if total > 0 then gotSomething = true end
                 if fightEvent then fightEvent.taken = total end
@@ -303,7 +348,10 @@ local function ReadFight(fightEvent, fightDur)
                 if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
                         local amt, who = Num(sp.totalAmount), RowUnit(sp)
-                        if amt and who then AddD("hurtBy", who, who, amt) end
+                        if amt and who then
+                            amt = New("hurt:" .. who .. ":" .. tostring(Num(sp.spellID) or "?"), amt)
+                            if amt > 0 then AddD("hurtBy", who, who, amt) end
+                        end
                     end
                 end
             end
@@ -317,7 +365,7 @@ local function ReadFight(fightEvent, fightDur)
             local guid = Str(src.sourceGUID)
             local name = Plain(roster, Str(src.name), guid)
             if src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName) then
-                local total = Num(src.totalAmount) or 0
+                local total = New("avoid", Num(src.totalAmount) or 0)
                 Count("avoidableTaken", total)
                 if fightEvent and total > 0 then fightEvent.avoid = total end
             end
@@ -332,7 +380,7 @@ local function ReadFight(fightEvent, fightDur)
             local guid = Str(src.sourceGUID)
             local name = Plain(roster, Str(src.name), guid)
             local died = Num(src.deathTimeSeconds) ~= nil or Num(src.deathRecapID) ~= nil or (Num(src.totalAmount) or 0) > 0
-            if died and name then
+            if died and name and New("death:" .. name, 1) > 0 then
                 n = n + 1
                 local isMe = src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or name == myName
                 if not isMe then ns.Tally("groupDeaths", name, name) end
@@ -349,7 +397,7 @@ local function ReadFight(fightEvent, fightDur)
                 local guid = Str(src.sourceGUID)
                 local name = Plain(roster, Str(src.name), guid)
                 if src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName) then
-                    Count(pair[2], Num(src.totalAmount) or 0)
+                    Count(pair[2], New(pair[2], Num(src.totalAmount) or 0))
                 end
             end
         end
@@ -438,6 +486,200 @@ ns.On("PLAYER_REGEN_ENABLED", function()
     local e = ns.lastFightEvent
     ns.lastFightEvent = nil
     ns.After(0.6, function() Poll(e) end)
+end)
+
+-- ---------------------------------------------------------
+-- Kills in a dungeon, counted from the meter
+-- ---------------------------------------------------------
+-- Inside an instance the game hides the kill event, and the XP a kill gives is no measure either: with a
+-- higher level player in the group most mobs give none. What can be read is the enemy list saved with
+-- every fight: how much damage each kind of creature took. A creature that dies has taken its own health
+-- in damage, so a kind's total is a whole number of healths, and dividing gives how many died.
+--
+-- The health of a kind is not given anywhere. It is worked out from every total that kind has ever shown
+-- in this character's log: the value that best explains them as one, two, three... of the same thing,
+-- allowing for the level or two that mobs of one kind differ by (LO..HI of the lowest health). A total far
+-- below it is a mob that was hurt and not killed. These are estimates: right for most pulls, off by one
+-- now and then, and too low when a kind was only ever met in packs.
+local LO, HI = 0.97, 1.22
+
+-- Every meter session in the log, with the damage each kind took in it: { f = { [id] = { d, n, c } }, t0, t1 }
+local function Sessions(events)
+    local out, cur, prev = {}, nil, nil
+    for _, e in ipairs(events) do
+        if e.k == "FIGHT" then
+            local foes, any = {}, false
+            for _, x in ipairs(e.foes or {}) do
+                if x.id and x.d then
+                    foes[x.id] = { d = x.d, n = (x.n ~= "Unknown") and x.n or nil, c = x.c }
+                    any = true
+                end
+            end
+            if any then
+                local t0 = e.t - (e.dur or 0)
+                if e.mdur then
+                    -- saved as what was new in each stretch: a later stretch of the same session adds on
+                    if e.cont and cur then
+                        for id, f in pairs(foes) do
+                            if cur.f[id] then cur.f[id].d = cur.f[id].d + f.d else cur.f[id] = f end
+                        end
+                        cur.t1 = e.t
+                    else
+                        cur = { f = foes, t0 = t0, t1 = e.t }
+                        out[#out + 1] = cur
+                    end
+                else
+                    -- before 0.3.21 a second read of a session was saved whole: it replaces the first
+                    local same = cur ~= nil and prev ~= nil and t0 - prev.t <= 6
+                    if same then
+                        for id, have in pairs(cur.f) do
+                            if not foes[id] or foes[id].d < have.d then same = false break end
+                        end
+                    end
+                    if same then
+                        cur.f, cur.t1 = foes, e.t
+                    else
+                        cur = { f = foes, t0 = t0, t1 = e.t }
+                        out[#out + 1] = cur
+                    end
+                end
+            end
+            prev = e
+        end
+    end
+    return out
+end
+
+-- How many of a kind with health u a total t is, or nil when it is not a whole number of them
+local function Fit(t, u, cap)
+    local lo, hi = math.max(1, math.ceil(t / (HI * u))), math.floor(t / (LO * u))
+    if lo > hi or lo > cap then return nil end
+    local n = math.floor(t / (1.04 * u) + 0.5)
+    return math.min(math.max(n, lo), math.min(hi, cap))
+end
+-- How well a health of u explains the totals: a total that is one of them counts most, one that is many
+-- counts little, and one that fits nothing counts against
+local function Score(u, totals, cap)
+    local s = 0
+    for _, t in ipairs(totals) do
+        if t < 0.15 * u then s = s - 0.1
+        elseif t < 0.7 * u then s = s - 0.75
+        else
+            local n = Fit(t, u, cap)
+            s = s + (n and (1 / n) or -1)
+        end
+    end
+    return s
+end
+local function Health(totals, cap)
+    local ts, seen, cands = {}, {}, {}
+    for _, t in ipairs(totals) do
+        if t >= 30 then
+            ts[#ts + 1] = t
+            seen[t] = true
+            for k = 1, 4 do
+                if t / k >= 30 then cands[math.floor(t / k + 0.5)] = true end
+            end
+        end
+    end
+    local best, bestScore = nil, nil
+    for u in pairs(cands) do
+        local s = Score(u, ts, cap) + (seen[u] and 0.5 or 0) -- a total actually seen is the likelier health
+        if best == nil or s > bestScore + 0.0005 or (math.abs(s - bestScore) <= 0.0005 and u > best) then
+            best, bestScore = u, s
+        end
+    end
+    return best
+end
+local function Died(t, u, cap)
+    if not u or t < 0.7 * u then return 0 end
+    return Fit(t, u, cap) or 1
+end
+
+-- What the whole log knows: sessions, and per kind its name, whether it is elite and its health
+local function Knowledge(events)
+    local sessions = Sessions(events)
+    local totals, name, elite, health = {}, {}, {}, {}
+    for _, s in ipairs(sessions) do
+        for id, f in pairs(s.f) do
+            totals[id] = totals[id] or {}
+            tinsert(totals[id], f.d)
+            name[id] = f.n or name[id]
+            elite[id] = f.c or elite[id]
+        end
+    end
+    for id, ts in pairs(totals) do health[id] = Health(ts, elite[id] and 6 or 12) end
+    return { sessions = sessions, name = name, elite = elite, health = health }
+end
+
+-- Fill in one finished run: out is its INST_OUT event. Returns true when there was meter data to count from.
+local function CountRun(events, out, know)
+    -- The run starts at the first entry into this instance since the last exit (a reload inside logs another)
+    local from = nil
+    for i = #events, 1, -1 do
+        local e = events[i]
+        if e ~= out and (e.t or 0) <= out.t then
+            if e.k == "INST_OUT" then break end
+            if e.k == "INST_IN" and e.n == out.n then from = e.t end
+        end
+    end
+    from = from or (out.t - (out.dur or 0))
+    local to = out.t + 5
+    -- What the game itself said about boss fights, and how many kills gave XP
+    local bossSeen, bossWon, seenByXP, grouped = {}, {}, 0, false
+    for _, e in ipairs(events) do
+        if (e.t or 0) >= from and e.t <= to then
+            if e.k == "BOSS" and e.n then
+                bossSeen[e.n] = true
+                if e.win then bossWon[e.n] = (bossWon[e.n] or 0) + 1 end
+            elseif e.k == "KILL" then seenByXP = seenByXP + 1
+            elseif e.k == "FIGHT" and e.party then grouped = true end
+        end
+    end
+    local byKind, any = {}, false
+    for _, s in ipairs(know.sessions) do
+        if s.t1 >= from - 60 and s.t1 <= to then
+            any = true
+            for id, f in pairs(s.f) do
+                byKind[id] = (byKind[id] or 0) + Died(f.d, know.health[id], know.elite[id] and 6 or 12)
+            end
+        end
+    end
+    if not any then return false end
+    local mobs, total = {}, 0
+    for id, n in pairs(byKind) do
+        local nm = know.name[id]
+        if nm and bossSeen[nm] then n = bossWon[nm] or 0 end -- the game said how each boss fight ended
+        if n > 0 then
+            total = total + n
+            if nm then mobs[nm] = (mobs[nm] or 0) + n end
+        end
+    end
+    total = math.max(total, seenByXP)
+    out.from, out.mobs, out.xpk, out.kills = from, mobs, seenByXP, total
+    -- The kills XP never showed are added to the totals: assists in a group (whose blow it was cannot be
+    -- known in there), kills alone
+    if total > seenByXP then Count(grouped and "assists" or "kills", total - seenByXP) end
+    return true
+end
+-- Called when you leave an instance
+function ns.CloseRun(out)
+    local char = ns.char
+    if not (char and out and out.t) then return end
+    CountRun(char.events, out, Knowledge(char.events))
+end
+-- Runs from before this was counted: once, at login
+ns.On("PLAYER_LOGIN", function()
+    local char = ns.char
+    if not char or (char.meta.runs or 0) >= 21 then return end
+    char.meta.runs = 21
+    local know = nil
+    for _, e in ipairs(char.events) do
+        if e.k == "INST_OUT" and e.mobs == nil then
+            know = know or Knowledge(char.events)
+            CountRun(char.events, e, know)
+        end
+    end
 end)
 
 ns.LOADED.Meter = true

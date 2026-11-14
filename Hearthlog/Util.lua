@@ -7,7 +7,7 @@ local ADDON_NAME, ns = ...
 -- written before Forever could be tested, so every game call that might
 -- not exist, or might change shape, goes through Call() and comes back nil
 -- instead of raising.
-ns.VERSION = "0.3.20"
+ns.VERSION = "0.3.21"
 ns.SCHEMA = 1
 ns.URL = "https://github.com/ericalle/hearthlog/releases"
 
@@ -157,13 +157,14 @@ function ns.Pat(fmt)
 end
 
 function ns.ShortName(name)
-    return name and (name:match("^([^%-]+)") or name) or nil
+    if ns.IsSecret(name) or type(name) ~= "string" then return nil end
+    return name:match("^([^%-]+)") or name
 end
 
 -- A player's plain character name: no realm and no surname. Forever shows "First Last" in chat, mail and
 -- the meter, while unit functions give "First"; every list is kept under the first name.
 function ns.PlayerName(name)
-    if type(name) ~= "string" then return nil end
+    if ns.IsSecret(name) or type(name) ~= "string" then return nil end
     return name:match("^([^%-%s]+)") or name
 end
 

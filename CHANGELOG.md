@@ -1,5 +1,29 @@
 # Hearthlog changelog
 
+## 0.3.21
+From a Deadmines run, the last ten minutes of it checked against the game's combat log.
+- In a group, damage done, damage taken and healing were counted more than once. The meter's session
+  belongs to the group: your own combat can stop and start again while the group fights on, and each
+  read then shows everything since the session began. Three of thirteen fights were read that way and
+  the total came out 15% high (23,583 against 20,463 in the log). Each read now counts only what is new
+  since the last read of the same session, and each fight keeps its own numbers.
+- Inside an instance the game hides chat text and who it is from. Two kinds of line (party chat and the
+  skill-up line) raised errors because of it. Hidden parts of a chat line are now treated as absent.
+- Messages you send are counted where they are sent, not from the line that comes back, so they count in
+  dungeons too. Whispers you send were never counted before; they are now.
+- One honorable kill was logged as two. The game sends its event twice.
+- A creature whose name had not loaded yet was filed as "Unknown". It is kept by its id.
+- Kills inside a dungeon are counted from the meter. They used to be noticed by the XP they give, and
+  with a higher level player in the group most mobs give none: 19 of the 56 that died in the logged
+  stretch. A creature that dies has taken its own health in damage, so the damage each kind took,
+  divided by that kind's health, is how many died. On the logged stretch that gives 54 of 56. The count
+  is made when you leave the instance and saved with the run, by kind. The exit line shows it, "Most
+  killed" uses it, and the kills XP never showed are added to your totals.
+- Runs already in the log are recounted once, at login: Deadmines from 22 kills to 168, Shadowfang Keep
+  from 95 to 132. Runs from before enemy lists were saved (0.3.18) stay as they were.
+- These counts are estimates. A kind only ever met in packs comes out low (Defias Blackguard: 3 counted,
+  6 died), and a big pull can be off by one. Boss kills are exact, from the game's own announcement.
+
 ## 0.3.20
 From the first dungeon run since kills were named from the meter (Shadowfang Keep, five players).
 - The last mob of every pull was filed as a kill you had no part in, with no entry in the log. It dies as

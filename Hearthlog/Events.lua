@@ -26,6 +26,8 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   ZONE       n=zone, sub=subzone
 --   INST_IN    n=instance name, kind=party|raid|pvp, party={..}
 --   INST_OUT   n=, dur=seconds inside, kills=, deaths=
+--              where the meter exists: kills= is counted from it, mobs={ name = how many died }, xpk= the
+--              kills that gave XP, from= when the run began
 --   PARTY      add={..}, rem={..}, n=size
 --   GOLD       v=copper (signed), ctx=vendor|loot|quest|mail|trade|ah|taxi|trainer|repair|other
 --   LOOT       i=itemID, n=name, q=quality
@@ -671,12 +673,14 @@ local function InstanceCheck()
     local name = inInst and (GetInstanceInfo()) or nil
     if inInst and (not instance or instance.n ~= name) then
         if instance then
-            Event("INST_OUT", { n = instance.n, dur = Now() - instance.t0, kills = instance.kills, deaths = instance.deaths })
+            local out = Event("INST_OUT", { n = instance.n, dur = Now() - instance.t0, kills = instance.kills, deaths = instance.deaths })
+            if out and ns.CloseRun then ns.CloseRun(out) end
         end
         instance = { n = name, kind = kind, t0 = Now(), kills = 0, deaths = 0 }
         Event("INST_IN", { n = name, kind = kind, party = #party > 0 and ns.CopyArray(party) or nil })
     elseif not inInst and instance then
-        Event("INST_OUT", { n = instance.n, dur = Now() - instance.t0, kills = instance.kills, deaths = instance.deaths })
+        local out = Event("INST_OUT", { n = instance.n, dur = Now() - instance.t0, kills = instance.kills, deaths = instance.deaths })
+        if out and ns.CloseRun then ns.CloseRun(out) end
         instance = nil
     end
 end
@@ -1137,6 +1141,30 @@ end
 local function SentBy(sender)
     return PlayerName(sender) == UnitName("player")
 end
+-- The call that sends a message is what gets counted, not the chat line that comes back: inside an
+-- instance the game hides who a chat line is from, your own included, and a whisper's line names the
+-- person you wrote to, not you. The function moved on the modern client; where the old name still exists
+-- it passes the call along, and one message must not count twice.
+local CHANNEL_OF = { SAY = "say", YELL = "yell", PARTY = "party", PARTY_LEADER = "party", INSTANCE_CHAT = "party",
+    RAID = "raid", RAID_WARNING = "raid", GUILD = "guild", OFFICER = "guild", WHISPER = "whisper", CHANNEL = "channel" }
+local sendHooked = false
+do
+    local lastType, lastAt = nil, nil
+    local function OnSend(_, chatType)
+        chatType = ns.Str(chatType)
+        chatType = chatType and chatType:upper() or "SAY"
+        local chan = CHANNEL_OF[chatType]
+        if not chan or not ns.char then return end
+        local at = GetTime and GetTime() or Now()
+        if chatType == lastType and at == lastAt then return end
+        lastType, lastAt = chatType, at
+        Count("messages")
+        ns.Tally("chat", chan, chan)
+    end
+    if SendChatMessage then ns.Hook("SendChatMessage", OnSend); sendHooked = true end
+    if C_ChatInfo and C_ChatInfo.SendChatMessage then ns.Hook(C_ChatInfo, "SendChatMessage", OnSend); sendHooked = true end
+end
+-- A client with neither function: fall back to the chat lines
 local function CountChat(chan)
     return function(msg, sender)
         if SentBy(sender) then
@@ -1145,14 +1173,15 @@ local function CountChat(chan)
         end
     end
 end
-ns.On("CHAT_MSG_SAY", CountChat("say"))
-ns.On("CHAT_MSG_YELL", CountChat("yell"))
-ns.On("CHAT_MSG_PARTY", CountChat("party"))
-ns.On("CHAT_MSG_PARTY_LEADER", CountChat("party"))
-ns.On("CHAT_MSG_RAID", CountChat("raid"))
-ns.On("CHAT_MSG_GUILD", CountChat("guild"))
-ns.On("CHAT_MSG_WHISPER_INFORM", CountChat("whisper"))
-ns.On("CHAT_MSG_CHANNEL", CountChat("channel"))
+if not sendHooked then
+    ns.On("CHAT_MSG_SAY", CountChat("say"))
+    ns.On("CHAT_MSG_YELL", CountChat("yell"))
+    ns.On("CHAT_MSG_PARTY", CountChat("party"))
+    ns.On("CHAT_MSG_PARTY_LEADER", CountChat("party"))
+    ns.On("CHAT_MSG_RAID", CountChat("raid"))
+    ns.On("CHAT_MSG_GUILD", CountChat("guild"))
+    ns.On("CHAT_MSG_CHANNEL", CountChat("channel"))
+end
 
 -- ---------------------------------------------------------
 -- Loot rolls, matched on the visible wording (English clients). Lines seen in game:
@@ -1428,7 +1457,16 @@ local function LookLine(msg)
 end
 ns.On("CHAT_MSG_SYSTEM", LookLine)
 ns.On("CHAT_MSG_LOOT", LookLine)
-ns.On("PLAYER_PVP_KILLS_CHANGED", function() Count("honorKills") end)
+-- An honorable kill. The game sends this event twice for one kill, so a second one inside a second is
+-- the same kill. Modern.lua adds who it was.
+local lastHonorAt = nil
+ns.On("PLAYER_PVP_KILLS_CHANGED", function()
+    local at = GetTime and GetTime() or Now()
+    if lastHonorAt and at - lastHonorAt < 1 then return end
+    lastHonorAt = at
+    Count("honorKills")
+    if ns.OnHonorKill then ns.OnHonorKill() end
+end)
 
 ns.On("CHAT_MSG_GUILD", OnChat("guild"))
 ns.On("CHAT_MSG_PARTY", OnChat("party"))

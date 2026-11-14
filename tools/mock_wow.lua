@@ -173,6 +173,8 @@ function M.ForeverMode()
     }
     -- The emote call moved; the old global still exists and passes the call along
     C_ChatInfo.PerformEmote = function(token) end
+    C_ChatInfo.SendChatMessage = function(msg, chatType, language, target) end
+    _G.SendChatMessage = function(...) C_ChatInfo.SendChatMessage(...) end
     _G.DoEmote = function(token) C_ChatInfo.PerformEmote(token) end
     -- The built-in damage meter. M.meter[kind] = { { guid, creatureID, name, total, me,
     --     spells = { { id, total, creature, overkill, unit, amount } } } }
@@ -248,6 +250,7 @@ _G.UnitClassification = function() return M.targetClass end
 _G.Ambiguate = function(n) return n end
 _G.JumpOrAscendStart = function() end
 _G.DoEmote = function(token) end
+_G.SendChatMessage = function(msg, chatType, language, target) end
 _G.hooksecurefunc = function(a, b, c)
     local tbl, name, fn = _G, a, b
     if type(a) == "table" then tbl, name, fn = a, b, c end
