@@ -142,8 +142,29 @@ local function NoXPKillCheck(stamp)
     if IsInGroup() then e.group = true; e.assist = true; Count("assists") else Count("kills") end
     ns.NoteKill(e)
 end
+-- Inside a dungeon or raid the game hides what died but still reports that something did, once for
+-- every death nearby. Counted against the game's combat log over two dungeon runs: 327 reports, 327
+-- deaths in the log (325 creatures, and my own two, which are the only ones not hidden). So the number
+-- of hidden reports during a run is the number of creatures that died in it. It is kept in the saved
+-- file, since a reload inside the instance must not lose it, and used when the run ends (Meter.lua).
+local function CountDeathInRun(arg)
+    if not (ns.char and not ns.paused and IsInInstance) then return end
+    local inside, kind = IsInInstance()
+    if not (Yes(inside) and (kind == "party" or kind == "raid")) then return end
+    local guid = ns.Str(arg)
+    if guid and guid:sub(1, 8) ~= "Creature" and guid:sub(1, 7) ~= "Vehicle" then return end -- a player or a pet
+    local m = ns.char.meta
+    m.died = (m.died or 0) + 1
+end
+-- A count left over from a run that never ended properly (logged out inside, came back outside)
+ns.On("PLAYER_ENTERING_WORLD", function()
+    ns.After(6, function()
+        if ns.char and IsInInstance and not Yes((IsInInstance())) then ns.char.meta.died = nil end
+    end)
+end)
 ns.On("UNIT_DIED", function(arg)
     InstNote("diedGuid", arg)
+    CountDeathInRun(arg)
     local guid = ns.Str(arg)
     local h = lastHostile
     if not guid or not h or h.guid ~= guid then return end

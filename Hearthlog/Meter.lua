@@ -116,6 +116,46 @@ local function InGroup(roster, name, guid)
     return false
 end
 
+-- The meter keeps a list of its sessions, and it can end one and start another while your own combat
+-- runs on (the group kills the last mob of a pull and pulls again within a few seconds, or a boss is
+-- pulled). Only the session it is showing is read below, so what you did in the one before is missed:
+-- about a tenth of the damage in a dungeon. Before that is changed, the list itself is saved with each
+-- group fight, the last four sessions as { id, seconds, my damage }, to see what the game keeps and
+-- for how long.
+local function SessionList()
+    if type(C_DamageMeter.GetAvailableCombatSessions) ~= "function" then return nil end
+    local ok, res = pcall(function()
+        local list = ns.Tbl(CallIn(C_DamageMeter, "GetAvailableCombatSessions"))
+        if not list then return nil end
+        local out = {}
+        for i = math.max(1, #list - 3), #list do
+            local s = ns.Tbl(list[i])
+            local id = s and Num(s.sessionID)
+            if id then
+                local mine = -1
+                if type(C_DamageMeter.GetCombatSessionFromID) == "function" then
+                    local d = ns.Tbl(CallIn(C_DamageMeter, "GetCombatSessionFromID", id, T.DamageDone))
+                    if d and ns.Tbl(d.combatSources) then
+                        mine = 0
+                        for _, src in ipairs(d.combatSources) do
+                            if not ns.IsSecret(src.isLocalPlayer) and src.isLocalPlayer == true then mine = Num(src.totalAmount) or -1 end
+                        end
+                    end
+                end
+                out[#out + 1] = { id, math.floor(Num(s.durationSeconds) or -1), mine }
+            elseif s and ns.char and not ns.char.meta.sessKeys then
+                -- not the fields expected: keep their names, once
+                local keys = {}
+                for k, v in pairs(s) do keys[#keys + 1] = tostring(k) .. (ns.IsSecret(v) and "=SECRET" or "") end
+                table.sort(keys)
+                ns.char.meta.sessKeys = table.concat(keys, ",")
+            end
+        end
+        return #out > 0 and out or nil
+    end)
+    return ok and res or nil
+end
+
 -- Returns true when done (data read, or nothing to read), false to retry (still secret)
 local function ReadFight(fightEvent, fightDur)
     local ok, avail = pcall(function()
@@ -184,6 +224,7 @@ local function ReadFight(fightEvent, fightDur)
         fightEvent.done = myDamage
         fightEvent.mdur = math.floor(dur) -- how long the meter's own session had run when it was read
         if same then fightEvent.cont = true end -- a later stretch of a session read before
+        if IsInGroup() and not ns.paused then fightEvent.sid, fightEvent.ss = sessionID, SessionList() end
         if #sources > 1 and groupDamage > 0 then fightEvent.share = math.floor(myDamage * 100 / groupDamage + 0.5) end
     end
 
@@ -503,7 +544,8 @@ end)
 -- now and then, and too low when a kind was only ever met in packs.
 local LO, HI = 0.97, 1.22
 
--- Every meter session in the log, with the damage each kind took in it: { f = { [id] = { d, n, c } }, t0, t1 }
+-- Every meter session in the log, with the damage each kind took in it and how many reads it is made of:
+-- { f = { [id] = { d, n, c } }, t0, t1, reads }
 local function Sessions(events)
     local out, cur, prev = {}, nil, nil
     for _, e in ipairs(events) do
@@ -523,9 +565,9 @@ local function Sessions(events)
                         for id, f in pairs(foes) do
                             if cur.f[id] then cur.f[id].d = cur.f[id].d + f.d else cur.f[id] = f end
                         end
-                        cur.t1 = e.t
+                        cur.t1, cur.reads = e.t, cur.reads + 1
                     else
-                        cur = { f = foes, t0 = t0, t1 = e.t }
+                        cur = { f = foes, t0 = t0, t1 = e.t, reads = 1 }
                         out[#out + 1] = cur
                     end
                 else
@@ -537,9 +579,9 @@ local function Sessions(events)
                         end
                     end
                     if same then
-                        cur.f, cur.t1 = foes, e.t
+                        cur.f, cur.t1, cur.reads = foes, e.t, cur.reads + 1
                     else
-                        cur = { f = foes, t0 = t0, t1 = e.t }
+                        cur = { f = foes, t0 = t0, t1 = e.t, reads = 1 }
                         out[#out + 1] = cur
                     end
                 end
@@ -558,24 +600,26 @@ local function Fit(t, u, cap)
     return math.min(math.max(n, lo), math.min(hi, cap))
 end
 -- How well a health of u explains the totals: a total that is one of them counts most, one that is many
--- counts little, and one that fits nothing counts against
-local function Score(u, totals, cap)
+-- counts little, and one that fits nothing counts against. Each total has its own limit on how many it
+-- can be (caps): a session made of several pulls can hold several pulls' worth.
+local function Score(u, totals, caps)
     local s = 0
-    for _, t in ipairs(totals) do
+    for i, t in ipairs(totals) do
         if t < 0.15 * u then s = s - 0.1
         elseif t < 0.7 * u then s = s - 0.75
         else
-            local n = Fit(t, u, cap)
+            local n = Fit(t, u, caps[i])
             s = s + (n and (1 / n) or -1)
         end
     end
     return s
 end
-local function Health(totals, cap)
-    local ts, seen, cands = {}, {}, {}
-    for _, t in ipairs(totals) do
+local function Health(totals, caps)
+    local ts, cs, seen, cands = {}, {}, {}, {}
+    for i, t in ipairs(totals) do
         if t >= 30 then
             ts[#ts + 1] = t
+            cs[#cs + 1] = caps[i]
             seen[t] = true
             for k = 1, 4 do
                 if t / k >= 30 then cands[math.floor(t / k + 0.5)] = true end
@@ -584,7 +628,7 @@ local function Health(totals, cap)
     end
     local best, bestScore = nil, nil
     for u in pairs(cands) do
-        local s = Score(u, ts, cap) + (seen[u] and 0.5 or 0) -- a total actually seen is the likelier health
+        local s = Score(u, ts, cs) + (seen[u] and 0.5 or 0) -- a total actually seen is the likelier health
         if best == nil or s > bestScore + 0.0005 or (math.abs(s - bestScore) <= 0.0005 and u > best) then
             best, bestScore = u, s
         end
@@ -599,21 +643,31 @@ end
 -- What the whole log knows: sessions, and per kind its name, whether it is elite and its health
 local function Knowledge(events)
     local sessions = Sessions(events)
-    local totals, name, elite, health = {}, {}, {}, {}
+    local totals, caps, name, elite, health = {}, {}, {}, {}, {}
     for _, s in ipairs(sessions) do
         for id, f in pairs(s.f) do
-            totals[id] = totals[id] or {}
-            tinsert(totals[id], f.d)
             name[id] = f.n or name[id]
             elite[id] = f.c or elite[id]
         end
     end
-    for id, ts in pairs(totals) do health[id] = Health(ts, elite[id] and 6 or 12) end
-    return { sessions = sessions, name = name, elite = elite, health = health }
+    -- The most of one kind in a single pull: six elites, twelve of anything else. A session read in
+    -- several stretches is several pulls. (Without this a session of four pulls with twelve of a kind
+    -- in it fitted nothing and was counted as one.)
+    local function Cap(id, s) return (elite[id] and 6 or 12) * (s.reads or 1) end
+    for _, s in ipairs(sessions) do
+        for id, f in pairs(s.f) do
+            totals[id], caps[id] = totals[id] or {}, caps[id] or {}
+            tinsert(totals[id], f.d)
+            tinsert(caps[id], Cap(id, s))
+        end
+    end
+    for id, ts in pairs(totals) do health[id] = Health(ts, caps[id]) end
+    return { sessions = sessions, name = name, elite = elite, health = health, Cap = Cap }
 end
 
--- Fill in one finished run: out is its INST_OUT event. Returns true when there was meter data to count from.
-local function CountRun(events, out, know)
+-- Fill in one finished run: out is its INST_OUT event. died is how many deaths the game reported nearby
+-- during the run (Modern.lua), when that was counted. Returns true when there was something to count from.
+local function CountRun(events, out, know, died)
     -- The run starts at the first entry into this instance since the last exit (a reload inside logs another)
     local from = nil
     for i = #events, 1, -1 do
@@ -641,11 +695,11 @@ local function CountRun(events, out, know)
         if s.t1 >= from - 60 and s.t1 <= to then
             any = true
             for id, f in pairs(s.f) do
-                byKind[id] = (byKind[id] or 0) + Died(f.d, know.health[id], know.elite[id] and 6 or 12)
+                byKind[id] = (byKind[id] or 0) + Died(f.d, know.health[id], know.Cap(id, s))
             end
         end
     end
-    if not any then return false end
+    if not any and not died then return false end
     local mobs, total = {}, 0
     for id, n in pairs(byKind) do
         local nm = know.name[id]
@@ -655,27 +709,34 @@ local function CountRun(events, out, know)
             if nm then mobs[nm] = (mobs[nm] or 0) + n end
         end
     end
-    total = math.max(total, seenByXP)
-    out.from, out.mobs, out.xpk, out.kills = from, mobs, seenByXP, total
+    -- How many died is known when the game's own death reports were counted; the count by kind above is
+    -- then only what names them. Without that count, the count by kind is all there is.
+    total = math.max(died or total, seenByXP)
+    -- What the totals already hold for this run: the kills XP showed, or the last count of the run
+    local before = out.mobs ~= nil and (out.kills or 0) or seenByXP
+    if out.mobs ~= nil and total <= before then return true end -- a recount never lowers a run
+    out.from, out.mobs, out.xpk, out.kills, out.died = from, mobs, seenByXP, total, died
     -- The kills XP never showed are added to the totals: assists in a group (whose blow it was cannot be
     -- known in there), kills alone
-    if total > seenByXP then Count(grouped and "assists" or "kills", total - seenByXP) end
+    if total > before then Count(grouped and "assists" or "kills", total - before) end
     return true
 end
 -- Called when you leave an instance
 function ns.CloseRun(out)
     local char = ns.char
     if not (char and out and out.t) then return end
-    CountRun(char.events, out, Knowledge(char.events))
+    local died = Num(char.meta.died)
+    char.meta.died = nil
+    CountRun(char.events, out, Knowledge(char.events), died and died > 0 and died or nil)
 end
--- Runs from before this was counted: once, at login
+-- Runs from before this was counted, and runs counted before a mistake in the count was fixed: once, at login
 ns.On("PLAYER_LOGIN", function()
     local char = ns.char
-    if not char or (char.meta.runs or 0) >= 21 then return end
-    char.meta.runs = 21
+    if not char or (char.meta.runs or 0) >= 22 then return end
+    char.meta.runs = 22
     local know = nil
     for _, e in ipairs(char.events) do
-        if e.k == "INST_OUT" and e.mobs == nil then
+        if e.k == "INST_OUT" and not e.died then
             know = know or Knowledge(char.events)
             CountRun(char.events, e, know)
         end

@@ -247,6 +247,72 @@ ns.ToggleUI(); ns.ShowTab("combat"); M.Advance(3)
 return out.kills, out.xpk, table.concat(mobs, ", "), ns.char.counters.assists - before, ns.EventLine and ns.EventLine(out) or ""''')
 assert (kills, by_xp, mobs, assists) == (6, 2, "Cookie 1, Defias Companion 1, Defias Pirate 4", 4), (kills, by_xp, mobs, assists, line)
 
+# Forever: inside a dungeon the game hides what died but reports every death. Those reports are the kill count
+# of the run (7 here: the count by kind would have said 6, XP showed 2). A death that is not hidden is a
+# player's (your own) and is no kill. The count survives a reload and is gone once the run is closed.
+kills, died, by_xp, named, assists, left, sid, ss = run(True, '''
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+C_DamageMeter.GetAvailableCombatSessions = function() return { { sessionID = 41, name = "a", durationSeconds = 20.4 }, { sessionID = 42, name = "b", durationSeconds = 41.2 } } end
+C_DamageMeter.GetCombatSessionFromID = function(id, kind)
+    return { durationSeconds = 20, combatSources = { { name = "Zinther Unbroken", isLocalPlayer = true, totalAmount = id * 10 }, { name = "Danwar the Bold", isLocalPlayer = false, totalAmount = 5 } } }
+end
+M.inInstance, M.instanceName = true, "Deadmines"
+M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(8)
+local session = 0
+local function pull(seconds, foes, xp, deaths)
+    M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(seconds)
+    for i = 1, deaths or 0 do M.Fire("UNIT_DIED", M.SECRET) end
+    for i = 1, xp or 0 do M.xp = M.xp + 82; M.Fire("PLAYER_XP_UPDATE"); M.Advance(1) end
+    session = session + 1
+    M.meter = { dur = seconds + (xp or 0),
+        [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = 400 + session, me = true }, { guid = "Player-1-000002", name = "Danwar the Bold", total = 900 } },
+        [10] = foes }
+    M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 41 + session); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(20)
+end
+local function pirates(d) return { creatureID = 657, name = "Defias Pirate", total = d, extra = { classification = "elite" } } end
+pull(20, { pirates(1716) }, 1, 1)
+M.Fire("UNIT_DIED", "Player-1-000001") -- my own death is not hidden
+M.Fire("PLAYER_ENTERING_WORLD", false, true); M.Advance(8) -- a reload inside
+pull(40, { pirates(5274), { creatureID = 3450, name = "Defias Companion", total = 425 } }, 1, 5)
+M.Fire("ENCOUNTER_START", 2746, "Cookie", 1, 5)
+pull(30, { { creatureID = 645, name = "Cookie", total = 3804, extra = { classification = "elite" } } }, 0, 1)
+M.Fire("ENCOUNTER_END", 2746, "Cookie", 1, 5, 1)
+local before = ns.char.counters.assists
+M.inInstance, M.instanceName = false, nil
+M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(8)
+local out, fight
+for _, e in ipairs(ns.char.events) do
+    if e.k == "INST_OUT" then out = e end
+    if e.k == "FIGHT" and e.ss then fight = e end
+end
+local named = 0
+for _, k in pairs(out.mobs) do named = named + k end
+return out.kills, out.died, out.xpk, named, ns.char.counters.assists - before, tostring(ns.char.meta.died),
+    fight.sid, fight.ss[1][1] .. ":" .. fight.ss[1][2] .. ":" .. fight.ss[1][3] .. " " .. fight.ss[2][1] .. ":" .. fight.ss[2][2] .. ":" .. fight.ss[2][3]''')
+assert (kills, died, by_xp, named, assists, left) == (7, 7, 2, 6, 5, "nil"), (kills, died, by_xp, named, assists, left)
+assert (sid, ss) == (44, "41:20:410 42:41:420"), (sid, ss)
+
+# Forever: a meter session read in four stretches holds four pulls. Twelve elites of a kind in it used to fit
+# nothing (the limit was six, for one pull) and were counted as one. And a recount of a saved run never lowers it.
+first, again, assists = run(True, '''
+local t = time() - 5000
+local function fight(at, d, cont) return { k = "FIGHT", t = at, dur = 30, mdur = cont and 120 or 30, cont = cont or nil, party = { "Danwar:MAGE" }, done = 100,
+    foes = { { id = 3853, n = "Shadowfang Moonwalker", c = "elite", d = d } } } end
+local ev = ns.char.events
+ev[#ev + 1] = { k = "INST_IN", t = t, n = "Shadowfang Keep", kind = "party" }
+ev[#ev + 1] = fight(t + 100, 1716)                       -- one, alone: its health
+ev[#ev + 1] = fight(t + 200, 3432); ev[#ev + 1] = fight(t + 240, 5148, true)
+ev[#ev + 1] = fight(t + 280, 5148, true); ev[#ev + 1] = fight(t + 320, 6864, true) -- twelve over four stretches
+local out = { k = "INST_OUT", t = t + 400, n = "Shadowfang Keep", dur = 400, kills = 0, deaths = 0 }
+ev[#ev + 1] = out
+local before = ns.char.counters.assists
+ns.char.meta.runs = nil; M.Fire("PLAYER_LOGIN")
+local first = out.kills
+out.kills, out.mobs["Shadowfang Moonwalker"] = 20, 20     -- as if an earlier count had said more
+ns.char.meta.runs = nil; M.Fire("PLAYER_LOGIN")
+return first, out.kills, ns.char.counters.assists - before''')
+assert (first, again, assists) == (13, 20, 13), (first, again, assists)
+
 # Forever: chat the game hides (text, sender or both) is no error, your own messages are counted where they are
 # sent, and a whisper counts too
 errors, messages, chans = run(True, '''

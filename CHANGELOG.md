@@ -1,5 +1,24 @@
 # Hearthlog changelog
 
+## 0.3.22
+From two dungeon runs, Shadowfang Keep and Deadmines, checked against the game's combat log.
+- Kills in a dungeon came out low: 102 counted where 142 died, 126 where 180 died. Working them out from
+  damage taken has too many ways to miss. The game hides what died in there but still reports every
+  death: 327 reports over the two runs, 327 deaths in the log. Those reports are now counted during a run
+  and are its kill count. The count by kind stays as the names behind "Most killed".
+- A mistake in the count by kind: a meter session read in several stretches was held to the limit of one
+  pull, so twelve of a kind over four pulls counted as one. Runs already saved are recounted once at
+  login where that raises them (Shadowfang Keep 102 to 111, Deadmines 126 to 132). They stay short of the
+  real numbers, since the death reports were not being counted yet.
+- Not fixed yet: about a tenth of your own damage in a dungeon is missed (16,000 of 170,000 over the two
+  runs, in six fights). The meter can end a session and start another while your own combat runs on, when
+  the group pulls again within seconds of the last kill or pulls a boss, and only the session it is
+  showing gets read. The meter's own list of sessions is now saved with each group fight, so the fix can
+  be checked against a log before it goes in.
+- What did match: nothing is counted twice any more (20 of the 76 fights continued a session), every
+  fight without a session change is within overkill of the log, all 15 boss fights, both deaths, and
+  outside the dungeons all 76 killing blows over two evenings.
+
 ## 0.3.21
 From a Deadmines run, the last ten minutes of it checked against the game's combat log.
 - In a group, damage done, damage taken and healing were counted more than once. The meter's session

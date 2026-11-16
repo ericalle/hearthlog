@@ -26,8 +26,9 @@ local Now, Event, Count, Call, CallIn = ns.Now, ns.Event, ns.Count, ns.Call, ns.
 --   ZONE       n=zone, sub=subzone
 --   INST_IN    n=instance name, kind=party|raid|pvp, party={..}
 --   INST_OUT   n=, dur=seconds inside, kills=, deaths=
---              where the meter exists: kills= is counted from it, mobs={ name = how many died }, xpk= the
---              kills that gave XP, from= when the run began
+--              where the meter exists: kills= how many died (died= the game's death reports during the
+--              run, else the count by kind), mobs={ name = how many died } worked out from the meter,
+--              xpk= the kills that gave XP, from= when the run began
 --   PARTY      add={..}, rem={..}, n=size
 --   GOLD       v=copper (signed), ctx=vendor|loot|quest|mail|trade|ah|taxi|trainer|repair|other
 --   LOOT       i=itemID, n=name, q=quality
