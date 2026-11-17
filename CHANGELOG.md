@@ -1,5 +1,24 @@
 # Hearthlog changelog
 
+## 0.3.23
+From a third dungeon run, Excavation Site: Wetlands with a few wipes, checked against the combat log.
+- The meter does not keep to your fights. It ends a session and starts another while your own combat
+  runs on, when the group pulls again within seconds of the last kill or pulls a boss, and a session
+  can run on after your combat has ended. Only the session on show at the end of your fight was read,
+  and the rest was missed: a tenth of the damage in two runs last week, a quarter of the healing in the
+  first attempt of this one (12,023 saved of 16,126). The meter keeps a list of its sessions, each
+  readable by its id, so every session since the last read is now read, and the one that was newest
+  last time is read again for what it gained.
+- The kill count from the game's death reports held up with friendly deaths around: 40, 63 and 8 counted
+  over the three attempts where 38, 62 and 7 creatures died. The difference is pets: a pet's death is
+  hidden like a creature's and counts as a kill, 4 over in 111. Players' deaths are not hidden and are
+  not counted (there were 17).
+- A run with a reload in the middle had only the part after the reload as its length (15 minutes for a
+  33 minute run). Its length and deaths are now the whole run's.
+- An error while the meter is being read is saved with the other errors. It used to vanish.
+- The meter's session list is no longer saved with each group fight. It was there for one version, to
+  find out the above.
+
 ## 0.3.22
 From two dungeon runs, Shadowfang Keep and Deadmines, checked against the game's combat log.
 - Kills in a dungeon came out low: 102 counted where 142 died, 126 where 180 died. Working them out from

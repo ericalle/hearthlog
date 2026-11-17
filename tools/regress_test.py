@@ -183,8 +183,38 @@ assert (n_kills, gray, n_events) == (2, 2, 2), (n_kills, gray, n_events)
 # ---- 0.3.21 ----
 # Forever, grouped: the meter's session belongs to the group. Your own combat can stop and start while it runs
 # on, and a second read shows totals since the session began. Only what is new counts, the second fight's own
-# numbers are its own, and the next real session counts in full.
+# numbers are its own, and the next real session counts in full. The session is known by its id in the
+# meter's list (0.3.23).
 done, danwar, second, cont, foes, total3 = run(True, '''
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+local function read(dur, mine, his, foes, id)
+    M.meter = { id = id, dur = dur,
+        [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = mine, me = true }, { guid = "Player-1-000002", name = "Danwar the Bold", total = his } },
+        [10] = foes }
+    M.Fire("DAMAGE_METER_COMBAT_SESSION_UPDATED", 0, 0); M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+end
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(31)
+read(31, 1502, 6000, { { creatureID = 657, name = "Defias Pirate", total = 5378 }, { creatureID = 3947, name = "Goblin Shipbuilder", total = 1716 } }, "a")
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(19)
+read(53, 2447, 9500, { { creatureID = 657, name = "Defias Pirate", total = 5378 }, { creatureID = 3947, name = "Goblin Shipbuilder", total = 3432 },
+    { creatureID = 1732, name = "Defias Squallshaper", total = 1716 } }, "a")
+local c, t = ns.char.counters, ns.char.tallies
+local done, danwar = c.damageDone, t.groupDmg.Danwar.d
+local fight
+for _, e in ipairs(ns.char.events) do if e.k == "FIGHT" then fight = e end end
+local names = {}
+for _, f in ipairs(fight.foes) do names[#names + 1] = f.n .. " " .. f.d end
+table.sort(names)
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(26)
+read(26, 1570, 4000, { { creatureID = 657, name = "Defias Pirate", total = 3432 } }, "b")
+return done, danwar, fight.done, fight.cont, table.concat(names, ", "), c.damageDone''')
+assert (done, danwar, second, cont, foes, total3) == (2447, 9500, 945, True, "Defias Squallshaper 1716, Goblin Shipbuilder 1716", 4017), \
+    (done, danwar, second, cont, foes, total3)
+
+# The same on a client whose meter has no list of sessions: there a read is taken for the same session when the
+# session is older than the time since the last read and nothing in it has gone down.
+done, danwar, second, cont, foes, total3 = run(True, '''
+C_DamageMeter.GetAvailableCombatSessions = nil
 M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
 local function read(dur, mine, his, foes)
     M.meter = { dur = dur,
@@ -250,12 +280,9 @@ assert (kills, by_xp, mobs, assists) == (6, 2, "Cookie 1, Defias Companion 1, De
 # Forever: inside a dungeon the game hides what died but reports every death. Those reports are the kill count
 # of the run (7 here: the count by kind would have said 6, XP showed 2). A death that is not hidden is a
 # player's (your own) and is no kill. The count survives a reload and is gone once the run is closed.
-kills, died, by_xp, named, assists, left, sid, ss = run(True, '''
+# (and its length is the whole run's, not the part since the reload)
+kills, died, by_xp, named, assists, left = run(True, '''
 M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
-C_DamageMeter.GetAvailableCombatSessions = function() return { { sessionID = 41, name = "a", durationSeconds = 20.4 }, { sessionID = 42, name = "b", durationSeconds = 41.2 } } end
-C_DamageMeter.GetCombatSessionFromID = function(id, kind)
-    return { durationSeconds = 20, combatSources = { { name = "Zinther Unbroken", isLocalPlayer = true, totalAmount = id * 10 }, { name = "Danwar the Bold", isLocalPlayer = false, totalAmount = 5 } } }
-end
 M.inInstance, M.instanceName = true, "Deadmines"
 M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(8)
 local session = 0
@@ -280,17 +307,14 @@ M.Fire("ENCOUNTER_END", 2746, "Cookie", 1, 5, 1)
 local before = ns.char.counters.assists
 M.inInstance, M.instanceName = false, nil
 M.Fire("PLAYER_ENTERING_WORLD", false, false); M.Advance(8)
-local out, fight
+local out
 for _, e in ipairs(ns.char.events) do
     if e.k == "INST_OUT" then out = e end
-    if e.k == "FIGHT" and e.ss then fight = e end
 end
 local named = 0
 for _, k in pairs(out.mobs) do named = named + k end
-return out.kills, out.died, out.xpk, named, ns.char.counters.assists - before, tostring(ns.char.meta.died),
-    fight.sid, fight.ss[1][1] .. ":" .. fight.ss[1][2] .. ":" .. fight.ss[1][3] .. " " .. fight.ss[2][1] .. ":" .. fight.ss[2][2] .. ":" .. fight.ss[2][3]''')
+return out.kills, out.died, out.xpk, named, ns.char.counters.assists - before, tostring(ns.char.meta.died) .. (out.dur >= out.t - out.from - 1 and "" or " short")''')
 assert (kills, died, by_xp, named, assists, left) == (7, 7, 2, 6, 5, "nil"), (kills, died, by_xp, named, assists, left)
-assert (sid, ss) == (44, "41:20:410 42:41:420"), (sid, ss)
 
 # Forever: a meter session read in four stretches holds four pulls. Twelve elites of a kind in it used to fit
 # nothing (the limit was six, for one pull) and were counted as one. And a recount of a saved run never lowers it.
@@ -312,6 +336,76 @@ out.kills, out.mobs["Shadowfang Moonwalker"] = 20, 20     -- as if an earlier co
 ns.char.meta.runs = nil; M.Fire("PLAYER_LOGIN")
 return first, out.kills, ns.char.counters.assists - before''')
 assert (first, again, assists) == (13, 20, 13), (first, again, assists)
+
+# ---- 0.3.23 ----
+# Forever: the meter does not keep to your fights. Here the session read after the first fight ("a") runs on
+# without you, a whole session ("b") comes and goes inside your second fight, and a third ("c") is on show
+# when that fight ends. All three are read by their ids: what "a" gained, and "b" and "c" in full.
+done2, healed2, cont, sn, share, total, danwar, foes = run(True, '''
+M.party = { "party1" }; M.units.party1 = { name = "Danwar", guid = "Player-1-000002" }; M.Fire("GROUP_ROSTER_UPDATE")
+local function session(id, dur, mine, his, heal, foes)
+    return { id = id, dur = dur,
+        [0] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = mine, me = true }, { guid = "Player-1-000002", name = "Danwar the Bold", total = his } },
+        [2] = { { guid = "Player-1-000001", name = "Zinther Unbroken", total = heal, me = true } },
+        [10] = foes }
+end
+local function fight(seconds, m)
+    M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(seconds)
+    M.meter = m
+    M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+end
+local function pirates(d) return { creatureID = 657, name = "Defias Pirate", total = d } end
+fight(20, session("a", 20, 500, 1000, 300, { pirates(1716) }))
+M.AddSession(session("a", 50, 500, 2500, 300, { pirates(3432) }))
+M.AddSession(session("b", 40, 700, 900, 2500, { pirates(1716), { creatureID = 3450, name = "Defias Companion", total = 425 } }))
+fight(49, session("c", 11, 100, 200, 357, { { creatureID = 645, name = "Cookie", total = 900 } }))
+local f
+for _, e in ipairs(ns.char.events) do if e.k == "FIGHT" then f = e end end
+local names = {}
+for _, x in ipairs(f.foes) do names[#names + 1] = x.n .. " " .. x.d end
+return f.done, f.healed, f.cont, f.sn, f.share, ns.char.counters.damageDone, ns.char.tallies.groupDmg.Danwar.d, table.concat(names, ", ")''')
+assert (done2, healed2, cont, sn, share, total, danwar) == (800, 2857, True, 3, 24, 1300, 3600), (done2, healed2, cont, sn, share, total, danwar)
+assert foes == "Defias Pirate 3432, Cookie 900, Defias Companion 425", foes
+
+# Forever: a reload must not read sessions a second time. Where the last read stopped is kept in the saved file:
+# of four sessions in the list, the two up to that point stay unread, the one after it and the new one are read.
+# At login there is nothing to go by (the list may hold another character's fights): the newest only.
+after_reload, at_login = run(True, '''
+local function session(id, mine) return { id = id, dur = 20, [0] = { { guid = "Player-1-000001", name = "Zinther", total = mine, me = true } } } end
+local function fight(m)
+    M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(20)
+    M.meter = m
+    M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+end
+M.AddSession(session("old1", 1000)); M.AddSession(session("old2", 2000))
+fight(session("first", 30))
+local at_login = ns.char.counters.damageDone
+return 0, at_login''')
+assert at_login == 30, at_login
+after_reload = run(True, '''
+local function session(id, mine) return { id = id, dur = 20, [0] = { { guid = "Player-1-000001", name = "Zinther", total = mine, me = true } } } end
+M.AddSession(session("read1", 1000)); local stopped = M.AddSession(session("read2", 2000)); M.AddSession(session("missed", 400))
+ns.char.meta.msid = stopped
+M.Fire("PLAYER_ENTERING_WORLD", false, true); M.Advance(6) -- a reload keeps the mark
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(20)
+M.meter = session("new", 30)
+M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(3)
+return ns.char.counters.damageDone''')
+assert after_reload == 430, after_reload
+
+# Forever: an error while the meter is read is kept with the other errors (it used to vanish), and what was
+# read of that session is not read again
+noted, counted = run(True, '''
+M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(10)
+M.meter = { dur = 10, [0] = { { guid = "Player-1-000001", name = "Zinther", total = 250, me = true, spells = { { id = 20271, total = 250 } } } } }
+local real = ns.Tally
+ns.Tally = function() error("boom") end
+M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(12)
+ns.Tally = real
+local n = ns.errorCount
+ns.errorCount, ns.errors = 0, {}
+return n, ns.char.counters.damageDone''')
+assert noted >= 1 and counted == 250, (noted, counted)
 
 # Forever: chat the game hides (text, sender or both) is no error, your own messages are counted where they are
 # sent, and a whisper counts too

@@ -184,8 +184,53 @@ function M.ForeverMode()
     Enum.DamageMeterType = { DamageDone = 0, Dps = 1, HealingDone = 2, Hps = 3, Absorbs = 4, Interrupts = 5, Dispels = 6,
         DamageTaken = 7, AvoidableDamageTaken = 8, Deaths = 9, EnemyDamageTaken = 10 }
     M.meter = nil
+    -- The meter's list of sessions. Every table assigned to M.meter is a session of its own; two tables with
+    -- the same id field are two reads of one session. M.AddSession(m) puts a finished session in the list
+    -- without showing it. Ids go up from 101.
+    M.sessionSeq, M.sessionList, M.sessionOf = 100, {}, {}
+    local function Register(m)
+        if not m then return nil end
+        local key = m.id or m
+        local s = M.sessionOf[key]
+        if not s then
+            M.sessionSeq = M.sessionSeq + 1
+            s = { id = M.sessionSeq }
+            M.sessionOf[key] = s
+            tinsert(M.sessionList, s)
+        end
+        s.m = m
+        return s
+    end
+    M.AddSession = function(m) return Register(m).id end
+    local function ByID(id)
+        Register(M.meter)
+        for _, s in ipairs(M.sessionList) do
+            if s.id == id then return s.m end
+        end
+    end
+    local FromType, SourceFromType
     _G.C_DamageMeter = {
         IsDamageMeterAvailable = function() return true end,
+        GetAvailableCombatSessions = function()
+            Register(M.meter)
+            local list = {}
+            for _, s in ipairs(M.sessionList) do tinsert(list, { sessionID = s.id, name = "", durationSeconds = s.m.dur }) end
+            return list
+        end,
+        GetCombatSessionFromID = function(id, kind)
+            local keep = M.meter
+            M.meter = ByID(id)
+            local res = M.meter and FromType(1, kind) or nil
+            M.meter = keep
+            return res
+        end,
+        GetCombatSessionSourceFromID = function(id, kind, guid, creatureID)
+            local keep = M.meter
+            M.meter = ByID(id)
+            local res = M.meter and SourceFromType(1, kind, guid, creatureID) or nil
+            M.meter = keep
+            return res
+        end,
         GetCombatSessionFromType = function(st, kind)
             local m = M.meter
             if not m then return { combatSources = {}, durationSeconds = 0, totalAmount = 0 } end
@@ -214,6 +259,7 @@ function M.ForeverMode()
             end
         end,
     }
+    FromType, SourceFromType = C_DamageMeter.GetCombatSessionFromType, C_DamageMeter.GetCombatSessionSourceFromType
 end
 _G.GetMoney = function() return M.money end
 _G.GetGuildInfo = function() return M.guild end

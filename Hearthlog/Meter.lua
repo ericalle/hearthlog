@@ -30,10 +30,14 @@ local function SpellName(id)
     return ns.Call("GetSpellInfo", id)
 end
 
+-- Which session is being read: one from the meter's list, by its id, or (nil) the one the meter is showing
+local reading = nil
 local function Session(kind)
+    if reading then return CallIn(C_DamageMeter, "GetCombatSessionFromID", reading, kind) end
     return CallIn(C_DamageMeter, "GetCombatSessionFromType", CURRENT, kind)
 end
 local function Source(kind, guid, creatureID)
+    if reading then return CallIn(C_DamageMeter, "GetCombatSessionSourceFromID", reading, kind, guid, creatureID) end
     return CallIn(C_DamageMeter, "GetCombatSessionSourceFromType", CURRENT, kind, guid, creatureID)
 end
 -- Who a per-ability row is about. Depending on the view the meter puts that in creatureName or in the
@@ -63,8 +67,9 @@ local attempts = 0
 -- combat can end and start again while it runs on, and every read then shows the totals since the session
 -- began. Counting each read in full counted the earlier part again (about 15% too much damage in a
 -- dungeon). So each number is taken as the difference from the last read of the same session.
--- A read is of the same session when the session is older than the time since the last read (a new one
--- cannot be) and nothing in it has gone down.
+-- Which session a read is of is known from the meter's list of sessions, by id (see ReadFight). On a client
+-- without that list it is worked out: a read is of the same session when the session is older than the time
+-- since the last read (a new one cannot be) and nothing in it has gone down.
 local prevSnap, prevDur, prevReadAt = nil, nil, nil
 local function Clock() return (GetTime and GetTime()) or Now() end
 
@@ -116,54 +121,12 @@ local function InGroup(roster, name, guid)
     return false
 end
 
--- The meter keeps a list of its sessions, and it can end one and start another while your own combat
--- runs on (the group kills the last mob of a pull and pulls again within a few seconds, or a boss is
--- pulled). Only the session it is showing is read below, so what you did in the one before is missed:
--- about a tenth of the damage in a dungeon. Before that is changed, the list itself is saved with each
--- group fight, the last four sessions as { id, seconds, my damage }, to see what the game keeps and
--- for how long.
-local function SessionList()
-    if type(C_DamageMeter.GetAvailableCombatSessions) ~= "function" then return nil end
-    local ok, res = pcall(function()
-        local list = ns.Tbl(CallIn(C_DamageMeter, "GetAvailableCombatSessions"))
-        if not list then return nil end
-        local out = {}
-        for i = math.max(1, #list - 3), #list do
-            local s = ns.Tbl(list[i])
-            local id = s and Num(s.sessionID)
-            if id then
-                local mine = -1
-                if type(C_DamageMeter.GetCombatSessionFromID) == "function" then
-                    local d = ns.Tbl(CallIn(C_DamageMeter, "GetCombatSessionFromID", id, T.DamageDone))
-                    if d and ns.Tbl(d.combatSources) then
-                        mine = 0
-                        for _, src in ipairs(d.combatSources) do
-                            if not ns.IsSecret(src.isLocalPlayer) and src.isLocalPlayer == true then mine = Num(src.totalAmount) or -1 end
-                        end
-                    end
-                end
-                out[#out + 1] = { id, math.floor(Num(s.durationSeconds) or -1), mine }
-            elseif s and ns.char and not ns.char.meta.sessKeys then
-                -- not the fields expected: keep their names, once
-                local keys = {}
-                for k, v in pairs(s) do keys[#keys + 1] = tostring(k) .. (ns.IsSecret(v) and "=SECRET" or "") end
-                table.sort(keys)
-                ns.char.meta.sessKeys = table.concat(keys, ",")
-            end
-        end
-        return #out > 0 and out or nil
-    end)
-    return ok and res or nil
-end
-
--- Returns true when done (data read, or nothing to read), false to retry (still secret)
-local function ReadFight(fightEvent, fightDur)
-    local ok, avail = pcall(function()
-        if C_DamageMeter.IsDamageMeterAvailable then return (CallIn(C_DamageMeter, "IsDamageMeterAvailable")) end
-        return true
-    end)
-    if ok and avail == false then return true end
-
+-- Reads one session into the totals and into the fight's event. Returns true when done (data read, or
+-- nothing to read), false to retry (still secret).
+-- known is given when the session is read from the meter's list by its id: known.base is what was read of
+-- this session before (nil: nothing), known.snap comes back as what it holds now, and the numbers a fight
+-- gathers from several sessions add up in known (foes, mine, group, dealers, got).
+local function ReadOne(fightEvent, fightDur, known)
     local dmg = ns.Tbl(Session(T.DamageDone))
     if not dmg then return false end -- secret or missing: try again
     if not ns.Tbl(dmg.combatSources) then return false end
@@ -200,15 +163,21 @@ local function ReadFight(fightEvent, fightDur)
     local key = string.format("%s|%d|%d|%d", tostring(sessionID or "?"), math.floor(dur), math.floor(groupTotal), #sources)
     -- With no damage dealt there is nothing in the fingerprint to tell two fights apart, so the time goes in
     if #sources == 0 then key = key .. "|" .. tostring(fightEvent and fightEvent.t or Now()) end
-    if key == lastKey then return true end
-    lastKey = key
-
     local myTotal = me and Num(me.totalAmount) or 0
-    local at = Clock()
-    local same = prevSnap ~= nil and dur >= prevDur + (at - prevReadAt) - 3
-        and myTotal >= (prevSnap.dmg or 0) and groupTotal >= (prevSnap.group or 0)
-    local base, snap = same and prevSnap or {}, {}
-    prevSnap, prevDur, prevReadAt = snap, dur, at
+    local same, base, snap = false, nil, {}
+    if known then
+        -- Read by id, there is no guessing: it is the same session when something of it was read before
+        same, base = known.base ~= nil, known.base or {}
+        known.snap = snap
+    else
+        if key == lastKey then return true end
+        lastKey = key
+        local at = Clock()
+        same = prevSnap ~= nil and dur >= prevDur + (at - prevReadAt) - 3
+            and myTotal >= (prevSnap.dmg or 0) and groupTotal >= (prevSnap.group or 0)
+        base = same and prevSnap or {}
+        prevSnap, prevDur, prevReadAt = snap, dur, at
+    end
     -- What is new in a total since the last read of this session (all of it, for a new session)
     local function New(key, total)
         snap[key] = total
@@ -218,14 +187,18 @@ local function ReadFight(fightEvent, fightDur)
 
     local myDamage = New("dmg", myTotal)
     local groupDamage = New("group", groupTotal)
-    local gotSomething = #sources > 0 -- a fight counts as read once any view had something in it
+    -- A fight counts as read once any view had something in it (for a session read before: something new)
+    local gotSomething = #sources > 0 and (not same or not known or groupDamage > 0)
     Count("damageDone", myDamage)
     if fightEvent and gotSomething then
-        fightEvent.done = myDamage
+        fightEvent.done = (fightEvent.done or 0) + myDamage
         fightEvent.mdur = math.floor(dur) -- how long the meter's own session had run when it was read
         if same then fightEvent.cont = true end -- a later stretch of a session read before
-        if IsInGroup() and not ns.paused then fightEvent.sid, fightEvent.ss = sessionID, SessionList() end
-        if #sources > 1 and groupDamage > 0 then fightEvent.share = math.floor(myDamage * 100 / groupDamage + 0.5) end
+        if known then
+            known.mine, known.group, known.dealers = known.mine + myDamage, known.group + groupDamage, math.max(known.dealers, #sources)
+        elseif #sources > 1 and groupDamage > 0 then
+            fightEvent.share = math.floor(myDamage * 100 / groupDamage + 0.5)
+        end
     end
 
     -- Group members' damage this fight (every source that is not us)
@@ -314,9 +287,24 @@ local function ReadFight(fightEvent, fightDur)
         -- A group fight keeps the list (the six biggest): in a dungeon it is the only record of what was
         -- fought, and it says which fights were the bosses
         if fightEvent and (IsInGroup() or (IsInInstance and (IsInInstance()) == true)) then
-            table.sort(foes, function(x, y) return x.d > y.d end)
-            fightEvent.foes = {}
-            for i = 1, math.min(#foes, 6) do fightEvent.foes[i] = foes[i] end
+            if known then
+                -- one fight can gather several sessions: the same kind in two of them is one line
+                for _, f in ipairs(foes) do
+                    local k = tostring(f.id or f.n)
+                    local have = known.foes[k]
+                    if have then
+                        have.d = have.d + f.d
+                        if f.m then have.m = (have.m or 0) + f.m end
+                        have.n, have.c = have.n or f.n, have.c or f.c
+                    else
+                        known.foes[k] = f
+                    end
+                end
+            else
+                table.sort(foes, function(x, y) return x.d > y.d end)
+                fightEvent.foes = {}
+                for i = 1, math.min(#foes, 6) do fightEvent.foes[i] = foes[i] end
+            end
         end
     end
 
@@ -333,7 +321,7 @@ local function ReadFight(fightEvent, fightDur)
                 total = New("heal", total)
                 Count("healingDone", total)
                 if total > 0 then gotSomething = true end
-                if fightEvent then fightEvent.healed = total end
+                if fightEvent then fightEvent.healed = (fightEvent.healed or 0) + total end
                 local det = ns.Tbl(guid and Source(T.HealingDone, guid))
                 if det and ns.Tbl(det.combatSpells) then
                     for _, sp in ipairs(det.combatSpells) do
@@ -383,7 +371,7 @@ local function ReadFight(fightEvent, fightDur)
                 local total = New("taken", Num(src.totalAmount) or 0)
                 Count("damageTaken", total)
                 if total > 0 then gotSomething = true end
-                if fightEvent then fightEvent.taken = total end
+                if fightEvent then fightEvent.taken = (fightEvent.taken or 0) + total end
                 guid = guid or myGUID
                 local det = ns.Tbl(guid and Source(T.DamageTaken, guid))
                 if det and ns.Tbl(det.combatSpells) then
@@ -408,7 +396,7 @@ local function ReadFight(fightEvent, fightDur)
             if src.isLocalPlayer == true or (guid ~= nil and guid == myGUID) or (name ~= nil and name == myName) then
                 local total = New("avoid", Num(src.totalAmount) or 0)
                 Count("avoidableTaken", total)
-                if fightEvent and total > 0 then fightEvent.avoid = total end
+                if fightEvent and total > 0 then fightEvent.avoid = (fightEvent.avoid or 0) + total end
             end
         end
     end
@@ -427,7 +415,7 @@ local function ReadFight(fightEvent, fightDur)
                 if not isMe then ns.Tally("groupDeaths", name, name) end
             end
         end
-        if fightEvent and n > 0 then fightEvent.deaths = n end
+        if fightEvent and n > 0 then fightEvent.deaths = (fightEvent.deaths or 0) + n end
     end
 
     -- Interrupts, dispels, absorbs: my totals
@@ -443,13 +431,119 @@ local function ReadFight(fightEvent, fightDur)
             end
         end
     end
-    if gotSomething then Count("meterFights") end
+    if known then known.got = known.got or gotSomething
+    elseif gotSomething then Count("meterFights") end
     return true
 end
 
+-- The meter keeps a list of its sessions, and it does not keep to your fights. It ends one and starts
+-- another while your own combat runs on (the group kills the last of a pull and pulls again within
+-- seconds, or pulls a boss), and a session can run on after your combat has ended. Reading only the one
+-- on show when your combat ends missed the rest: a tenth of the damage in two dungeon runs, a quarter
+-- of the healing in a third. So every session since the last read is read, each by its id, and the one
+-- that was newest last time is read again for what it gained since.
+--
+-- Returns the ids in the list, oldest first; nil when this client has no such list (then only the
+-- session on show can be read); false while the list is hidden.
+local function SessionIDs()
+    if type(C_DamageMeter.GetAvailableCombatSessions) ~= "function" or type(C_DamageMeter.GetCombatSessionFromID) ~= "function"
+        or type(C_DamageMeter.GetCombatSessionSourceFromID) ~= "function" then return nil end
+    local list = ns.Tbl(CallIn(C_DamageMeter, "GetAvailableCombatSessions"))
+    if not list then return false end
+    local ids = {}
+    for _, s in ipairs(list) do
+        local id = ns.Tbl(s) and Num(s.sessionID)
+        if not id then return false end
+        ids[#ids + 1] = id
+    end
+    table.sort(ids)
+    return ids
+end
+
+local lastID, lastSnap = nil, nil -- the newest session at the last read, and what was read of it
+local acc = nil                   -- what the sessions read for one fight add up to
+
+-- Returns true when done (data read, or nothing to read), false to retry (still secret)
+local function ReadFight(fightEvent, fightDur)
+    local ok, avail = pcall(function()
+        if C_DamageMeter.IsDamageMeterAvailable then return (CallIn(C_DamageMeter, "IsDamageMeterAvailable")) end
+        return true
+    end)
+    if ok and avail == false then return true end
+
+    local ids = SessionIDs()
+    if ids == nil then
+        reading = nil
+        return ReadOne(fightEvent, fightDur)
+    end
+    if ids == false then return false end
+    if #ids == 0 then return true end
+
+    -- Where the last read stopped is kept in the saved file as well, so that a reload does not read
+    -- sessions a second time. It is forgotten at login (below): the list may then hold another
+    -- character's fights.
+    local meta = ns.char and ns.char.meta
+    if lastID == nil and meta then lastID = Num(meta.msid) end
+    local newest, todo = ids[#ids], {}
+    if lastID == nil or newest < lastID then
+        -- Nothing to go by (the first fight since login, or the meter was reset): the newest one only
+        todo[1], lastSnap = newest, nil
+    else
+        for _, id in ipairs(ids) do
+            if id > lastID or (id == lastID and lastSnap) then todo[#todo + 1] = id end
+        end
+        while #todo > 12 do table.remove(todo, 1) end
+    end
+
+    if not acc or acc.ev ~= fightEvent then
+        acc = { ev = fightEvent, foes = {}, mine = 0, group = 0, dealers = 0, n = 0, got = false }
+    end
+    for _, id in ipairs(todo) do
+        acc.base, acc.snap = (id == lastID) and lastSnap or nil, nil
+        reading = id
+        local fine, done = pcall(ReadOne, fightEvent, fightDur, acc)
+        reading = nil
+        if not fine then
+            -- Whatever of it was counted stays counted: it is not read again
+            lastID, lastSnap = id, nil
+            if meta then meta.msid = lastID end
+            error(done, 0)
+        end
+        if not done and id == newest then return false end -- still hidden: come back for it
+        -- (an older one that cannot be read any more is passed over)
+        lastID, lastSnap = id, done and acc.snap or nil
+        if meta then meta.msid = lastID end
+        if done then acc.n = acc.n + 1 end
+    end
+
+    if fightEvent then
+        if next(acc.foes) then
+            -- A group fight keeps the list of what was fought (the eight biggest)
+            local foes = {}
+            for _, f in pairs(acc.foes) do foes[#foes + 1] = f end
+            table.sort(foes, function(x, y) return x.d > y.d end)
+            fightEvent.foes = {}
+            for i = 1, math.min(#foes, 8) do fightEvent.foes[i] = foes[i] end
+        end
+        if acc.dealers > 1 and acc.group > 0 then fightEvent.share = math.floor(acc.mine * 100 / acc.group + 0.5) end
+        if acc.n > 1 then fightEvent.sn = acc.n end -- how many sessions went into this fight
+    end
+    if acc.got then
+        Count("meterFights")
+        acc.got = false
+    end
+    return true
+end
+ns.On("PLAYER_ENTERING_WORLD", function(isLogin)
+    if isLogin == true and ns.char then ns.char.meta.msid = nil end
+end)
+
 local function Poll(fightEvent, fightDur)
     local ok, done = pcall(ReadFight, fightEvent, fightDur)
-    if not ok and ns.debug then ns.Print("meter error: " .. tostring(done)) end
+    if not ok then
+        if ns.NoteError then ns.NoteError("meter", done) end
+        if ns.debug then ns.Print("meter error: " .. tostring(done)) end
+    end
     if ok and done then return end
     attempts = attempts + 1
     if attempts >= 15 then return end -- about 9 seconds; the meter stayed secret (pvp, or a new fight started)
@@ -565,9 +659,9 @@ local function Sessions(events)
                         for id, f in pairs(foes) do
                             if cur.f[id] then cur.f[id].d = cur.f[id].d + f.d else cur.f[id] = f end
                         end
-                        cur.t1, cur.reads = e.t, cur.reads + 1
+                        cur.t1, cur.reads = e.t, cur.reads + (e.sn or 1)
                     else
-                        cur = { f = foes, t0 = t0, t1 = e.t, reads = 1 }
+                        cur = { f = foes, t0 = t0, t1 = e.t, reads = e.sn or 1 }
                         out[#out + 1] = cur
                     end
                 else
@@ -680,9 +774,10 @@ local function CountRun(events, out, know, died)
     from = from or (out.t - (out.dur or 0))
     local to = out.t + 5
     -- What the game itself said about boss fights, and how many kills gave XP
-    local bossSeen, bossWon, seenByXP, grouped = {}, {}, 0, false
+    local bossSeen, bossWon, seenByXP, grouped, deaths = {}, {}, 0, false, 0
     for _, e in ipairs(events) do
         if (e.t or 0) >= from and e.t <= to then
+            if e.k == "DEATH" and e.t <= out.t then deaths = deaths + 1 end
             if e.k == "BOSS" and e.n then
                 bossSeen[e.n] = true
                 if e.win then bossWon[e.n] = (bossWon[e.n] or 0) + 1 end
@@ -690,6 +785,9 @@ local function CountRun(events, out, know, died)
             elseif e.k == "FIGHT" and e.party then grouped = true end
         end
     end
+    -- A reload inside starts the run's clock and death count again; the run is from its first entry
+    if out.t - from > (out.dur or 0) then out.dur = math.floor(out.t - from) end
+    if deaths > (out.deaths or 0) then out.deaths = deaths end
     local byKind, any = {}, false
     for _, s in ipairs(know.sessions) do
         if s.t1 >= from - 60 and s.t1 <= to then
@@ -732,13 +830,13 @@ end
 -- Runs from before this was counted, and runs counted before a mistake in the count was fixed: once, at login
 ns.On("PLAYER_LOGIN", function()
     local char = ns.char
-    if not char or (char.meta.runs or 0) >= 22 then return end
-    char.meta.runs = 22
+    if not char or (char.meta.runs or 0) >= 23 then return end
+    char.meta.runs = 23
     local know = nil
     for _, e in ipairs(char.events) do
-        if e.k == "INST_OUT" and not e.died then
+        if e.k == "INST_OUT" then
             know = know or Knowledge(char.events)
-            CountRun(char.events, e, know)
+            CountRun(char.events, e, know, Num(e.died)) -- a run whose deaths were counted keeps that count
         end
     end
 end)
