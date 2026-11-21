@@ -214,6 +214,7 @@ if M.forever then
     fire("PLAYER_REGEN_DISABLED")
     M.units.target.threat = nil   -- the threat list empties as it dies
     fire("UNIT_THREAT_LIST_UPDATE", "player")
+    fire("PARTY_KILL", "Player-1-000001", "Creature-0-1-0-1-4075-0030") -- the game reports our killing blow
     fire("UNIT_DIED", "Creature-0-1-0-1-4075-0030")
     M.Advance(2)
     fire("PLAYER_REGEN_ENABLED")
@@ -224,6 +225,15 @@ if M.forever then
     fire("PLAYER_TARGET_CHANGED")
     fire("UNIT_DIED", "Creature-0-1-0-1-7-0031")
     M.Advance(2)
+    -- Nor is one we were fighting when a guard finished it: on its threat list, in combat, but no blow of ours
+    M.units.target = { name = "Guarded Zombie", guid = "Creature-0-1-0-1-8-0032", hostile = true, threat = 1 }
+    M.targetGUID = "Creature-0-1-0-1-8-0032"
+    fire("PLAYER_TARGET_CHANGED")
+    fire("PLAYER_REGEN_DISABLED")
+    fire("UNIT_DIED", "Creature-0-1-0-1-8-0032")
+    M.Advance(2)
+    fire("PLAYER_REGEN_ENABLED")
+    M.Advance(1)
     M.units.target = { name = "Kobold Vermin", guid = "Creature-0-1-0-1-6-0003", hostile = true }
     M.targetGUID = "Creature-0-1-0-1-6-0003"
     fire("PLAYER_TARGET_CHANGED")

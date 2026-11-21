@@ -1,5 +1,22 @@
 # Hearthlog changelog
 
+## 0.3.24
+From a week on two characters, checked against the game's combat log.
+- A character could end up with two records. The game does not always have the realm's name ready at
+  login. The record's name then came out as "Name-" and that login's play was saved apart from the rest
+  (an hour of a new priest's, in my case). With no realm name, the one record under the character's name
+  is now used, and records already split are joined at the next login: events and sessions in order of
+  time, counts added.
+- A mob you had targeted that someone else killed, a guard or another player, could count as your kill
+  when it had you on its threat list: six of 340 kills on a low level character in a busy zone. A kill
+  now needs your killing blow or its XP. The game reported every one of 381 killing blows that week,
+  the 47 from a damage-over-time tick included, so nothing real depended on the old rule.
+- Reading the meter by session id (0.3.23) holds up when playing alone: over 340 fights, damage done
+  came to 47,906 against 47,929 in the log and damage taken to 19,928 against 19,948. The meter counts
+  overkill as damage done and absorbed damage as damage taken, and the log has to be read the same way
+  to compare. It has not been through a dungeon yet.
+- The count of sessions saved with a fight included sessions with nothing new in them.
+
 ## 0.3.23
 From a third dungeon run, Excavation Site: Wetlands with a few wipes, checked against the combat log.
 - The meter does not keep to your fights. It ends a session and starts another while your own combat

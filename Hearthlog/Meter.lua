@@ -431,7 +431,7 @@ local function ReadOne(fightEvent, fightDur, known)
             end
         end
     end
-    if known then known.got = known.got or gotSomething
+    if known then known.got, known.fresh = known.got or gotSomething, gotSomething
     elseif gotSomething then Count("meterFights") end
     return true
 end
@@ -499,7 +499,7 @@ local function ReadFight(fightEvent, fightDur)
         acc = { ev = fightEvent, foes = {}, mine = 0, group = 0, dealers = 0, n = 0, got = false }
     end
     for _, id in ipairs(todo) do
-        acc.base, acc.snap = (id == lastID) and lastSnap or nil, nil
+        acc.base, acc.snap, acc.fresh = (id == lastID) and lastSnap or nil, nil, false
         reading = id
         local fine, done = pcall(ReadOne, fightEvent, fightDur, acc)
         reading = nil
@@ -513,7 +513,7 @@ local function ReadFight(fightEvent, fightDur)
         -- (an older one that cannot be read any more is passed over)
         lastID, lastSnap = id, done and acc.snap or nil
         if meta then meta.msid = lastID end
-        if done then acc.n = acc.n + 1 end
+        if done and acc.fresh then acc.n = acc.n + 1 end -- sessions that had something new in them
     end
 
     if fightEvent then

@@ -407,6 +407,70 @@ ns.errorCount, ns.errors = 0, {}
 return n, ns.char.counters.damageDone''')
 assert noted >= 1 and counted == 250, (noted, counted)
 
+# ---- 0.3.24 ----
+# A character whose realm name was missing at one login got a second record under "Name-". At the next login
+# the two are joined: events and sessions in order of time, paths still beside their sessions, counts added,
+# "largest ever" counters and best rolls kept as the larger, a skill's standing from the newer record.
+SPLIT = '''
+HearthlogDB = { chars = {
+    ["Zinther-TestRealm"] = { meta = { class = "DRUID", race = "Tauren", created = 100, played = 500 },
+        events = { { k = "ZONE", t = 100, n = "A" }, { k = "ZONE", t = 300, n = "C" } },
+        sessions = { { t0 = 100, t1 = 150 }, { t0 = 300, t1 = 350 } }, pos = { { "a" }, { "c" } },
+        counters = { kills = 5, maxHitDone = 40, miles = { f = 10 } },
+        tallies = { items = { [2589] = { n = 2, nm = "Linen Cloth", q = 1 } }, skills = { Herbalism = { n = 1, nm = "Herbalism", v = 10 } },
+            rolls = { Danwar = { n = 1, nm = "Danwar", hi = 80, s = 80 } } },
+        gearSeen = { [10] = true } },
+    ["Zinther-"] = { meta = { class = "DRUID", race = "Tauren", created = 200, played = 900, guild = "Bloodsabers" },
+        events = { { k = "ZONE", t = 200, n = "B" }, { k = "ZONE", t = 400, n = "D" } },
+        sessions = { { t0 = 200, t1 = 250 } }, pos = { { "b" } },
+        counters = { kills = 3, maxHitDone = 55, miles = { f = 5 } },
+        tallies = { items = { [2589] = { n = 3, nm = "Linen Cloth", q = 1 }, [4306] = { n = 1, nm = "Silk Cloth", q = 1 } },
+            skills = { Herbalism = { n = 2, nm = "Herbalism", v = 25 } }, rolls = { Danwar = { n = 2, nm = "Danwar", hi = 60, s = 100 } } },
+        gearSeen = { [11] = true } },
+} }
+'''
+res = run(True, '''
+local c = ns.char
+local order = {}
+for i = 1, 4 do order[i] = c.events[i].n end
+local t = c.tallies
+return ns.key, tostring(HearthlogDB.chars["Zinther-"]), table.concat(order), c.pos[1][1] .. c.pos[2][1] .. c.pos[3][1], #c.sessions, c.counters.kills, c.counters.maxHitDone,
+    c.counters.miles.f, t.items[2589].n, t.items[2589].q, t.items[4306].n, t.skills.Herbalism.v, t.skills.Herbalism.n, t.rolls.Danwar.hi, t.rolls.Danwar.s,
+    c.meta.created, c.meta.played, c.meta.guild, (c.gearSeen[10] and c.gearSeen[11]) and "both" or "no"''', pre=SPLIT)
+assert tuple(res)[:4] == ("Zinther-TestRealm", "nil", "ABCD", "abc"), tuple(res)[:4]
+assert tuple(res)[4:16] == (4, 8, 55, 15, 5, 1, 1, 25, 3, 80, 180, 100) and res[16] >= 900 and tuple(res)[17:] == ("Bloodsabers", "both"), tuple(res)[4:]
+
+# The realm name missing at login: the one record under this name is used, no second one is started. A record
+# of the same name that is another character's (another class) is left alone, and so is a stray one then.
+key, bare, n = run(True, 'return ns.key, tostring(HearthlogDB.chars["Zinther-"]), #ns.char.events >= 1 and ns.char.events[1].k or "none"',
+    pre='''GetNormalizedRealmName = function() return nil end
+GetRealmName = function() return "" end
+HearthlogDB = { chars = { ["Zinther-TestRealm"] = { meta = { class = "DRUID", race = "Tauren", realm = "Test Realm" }, events = { { k = "MARK", t = 5 } } } } }''')
+assert (key, bare, n) == ("Zinther-TestRealm", "nil", "MARK"), (key, bare, n)
+key, other, stray = run(True, 'return ns.key, #HearthlogDB.chars["Zinther-OtherRealm"].events, #HearthlogDB.chars["Zinther-"].events',
+    pre='''HearthlogDB = { chars = {
+    ["Zinther-OtherRealm"] = { meta = { class = "MAGE", race = "Troll" }, events = { { k = "MARK", t = 5 } } },
+    ["Zinther-"] = { meta = { class = "MAGE", race = "Troll" }, events = { { k = "MARK", t = 6 }, { k = "MARK", t = 7 } } } } }''')
+assert (key, other, stray) == ("Zinther-TestRealm", 1, 2), (key, other, stray)
+
+# Forever: a target that dies while we fight it, with no killing blow of ours and no XP, is someone else's kill
+# (a guard's, another player's). Our own blow on a mob that gives no XP is still a kill.
+kills, events = run(True, '''
+M.units.target = { name = "Wretched Zombie", guid = "Creature-0-1-0-1-1501-0001", hostile = true, threat = 1 }
+M.targetGUID = "Creature-0-1-0-1-1501-0001"
+M.Fire("PLAYER_TARGET_CHANGED"); M.Fire("PLAYER_REGEN_DISABLED"); M.Advance(2)
+M.Fire("UNIT_DIED", "Creature-0-1-0-1-1501-0001"); M.Advance(3)
+local first = ns.char.counters.kills
+M.units.target = { name = "Gray Rat", guid = "Creature-0-1-0-1-4075-0002", hostile = true, threat = 1, trivial = true }
+M.targetGUID = "Creature-0-1-0-1-4075-0002"
+M.Fire("PLAYER_TARGET_CHANGED"); M.Advance(1)
+M.Fire("PARTY_KILL", "Player-1-000001", "Creature-0-1-0-1-4075-0002"); M.Fire("UNIT_DIED", "Creature-0-1-0-1-4075-0002"); M.Advance(3)
+M.Fire("PLAYER_REGEN_ENABLED"); M.Advance(2)
+local n = 0
+for _, e in ipairs(ns.char.events) do if e.k == "KILL" then n = n + 1 end end
+return first .. ">" .. ns.char.counters.kills, n''')
+assert (kills, events) == ("0>1", 1), (kills, events)
+
 # Forever: chat the game hides (text, sender or both) is no error, your own messages are counted where they are
 # sent, and a whisper counts too
 errors, messages, chans = run(True, '''

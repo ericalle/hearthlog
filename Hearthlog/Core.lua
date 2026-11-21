@@ -121,9 +121,140 @@ function ns.Setting(key)
     return ns.db and ns.db.settings and ns.db.settings[key]
 end
 
+-- Adds one record of a character to another record of the same character (see InitChar)
+local function MergeChar(into, from)
+    local function LastT(c)
+        local e = c.events and c.events[#c.events]
+        return e and e.t or 0
+    end
+    local fromNewer = LastT(from) >= LastT(into)
+    -- Play sessions and their paths are two lists side by side: both go in order of time
+    local both = {}
+    for i, s in ipairs(into.sessions or {}) do both[#both + 1] = { s = s, p = (into.pos or {})[i] or {}, i = #both } end
+    for i, s in ipairs(from.sessions or {}) do both[#both + 1] = { s = s, p = (from.pos or {})[i] or {}, i = #both } end
+    table.sort(both, function(a, b)
+        local ta, tb = a.s.t0 or 0, b.s.t0 or 0
+        if ta ~= tb then return ta < tb end
+        return a.i < b.i
+    end)
+    into.sessions, into.pos = {}, {}
+    for i, x in ipairs(both) do into.sessions[i], into.pos[i] = x.s, x.p end
+    -- Events in order of time; two in the same second stay in the order they were written
+    local evs = {}
+    for _, e in ipairs(into.events or {}) do evs[#evs + 1] = { e = e, i = #evs } end
+    for _, e in ipairs(from.events or {}) do evs[#evs + 1] = { e = e, i = #evs } end
+    table.sort(evs, function(a, b)
+        local ta, tb = a.e.t or 0, b.e.t or 0
+        if ta ~= tb then return ta < tb end
+        return a.i < b.i
+    end)
+    into.events = {}
+    for i, x in ipairs(evs) do into.events[i] = x.e end
+    -- Counters add up, except the "largest ever" ones
+    into.counters = into.counters or {}
+    for k, v in pairs(from.counters or {}) do
+        local have = into.counters[k]
+        if type(v) == "number" then
+            if type(have) ~= "number" then into.counters[k] = v
+            elseif k:sub(1, 3) == "max" then into.counters[k] = math.max(have, v)
+            else into.counters[k] = have + v end
+        elseif type(v) == "table" then
+            if type(have) ~= "table" then have = {}; into.counters[k] = have end
+            for kk, vv in pairs(v) do
+                if type(vv) == "number" then have[kk] = (have[kk] or 0) + vv end
+            end
+        end
+    end
+    -- Tallies add up field by field. Not everything in them is a count: q is an item's quality, v a
+    -- skill's or a reputation's standing (the newer one holds), hi the best roll.
+    into.tallies = into.tallies or {}
+    for group, t in pairs(from.tallies or {}) do
+        if type(t) == "table" then
+            local dst = into.tallies[group]
+            if type(dst) ~= "table" then dst = {}; into.tallies[group] = dst end
+            for id, rec in pairs(t) do
+                local have = dst[id]
+                if type(rec) ~= "table" or type(have) ~= "table" then
+                    if have == nil then dst[id] = rec end
+                else
+                    for f, v in pairs(rec) do
+                        if type(v) ~= "number" or f == "q" then
+                            if have[f] == nil then have[f] = v end
+                        elseif f == "v" then
+                            if have[f] == nil or fromNewer then have[f] = v end
+                        elseif f == "hi" then
+                            have[f] = math.max(have[f] or v, v)
+                        else
+                            have[f] = (have[f] or 0) + v
+                        end
+                    end
+                end
+            end
+        end
+    end
+    into.records, into.gearSeen = into.records or {}, into.gearSeen or {}
+    for k, v in pairs(from.records or {}) do
+        local have = into.records[k]
+        if have == nil then into.records[k] = v
+        elseif type(have) == "number" and type(v) == "number" then into.records[k] = math.max(have, v) end
+    end
+    for k, v in pairs(from.gearSeen or {}) do
+        if into.gearSeen[k] == nil then into.gearSeen[k] = v end
+    end
+    into.meta = into.meta or {}
+    local m, f = into.meta, from.meta or {}
+    if f.created and (not m.created or f.created < m.created) then m.created = f.created end
+    if f.played and (not m.played or f.played > m.played) then m.played = f.played end
+    m.guild = m.guild or f.guild
+    if type(f.inst) == "table" then
+        m.inst = m.inst or {}
+        for k, v in pairs(f.inst) do
+            if type(v) == "number" then m.inst[k] = (m.inst[k] or 0) + v end
+        end
+    end
+end
+
 local function InitChar()
     local key = ns.CharKey()
+    local me = UnitName("player") or "Unknown"
+    local bare = me .. "-"
+    local myGUID = UnitGUID and UnitGUID("player") or nil
+    if type(myGUID) ~= "string" then myGUID = nil end
+    local _, myClass = UnitClass("player")
+    local _, myRace = UnitRace("player")
+    -- Is a saved record this character's? By its GUID when the record has one, else by class and race
+    local function Mine(c)
+        local m = type(c) == "table" and c.meta or nil
+        if not m then return false end
+        if m.guid and myGUID then return m.guid == myGUID end
+        return m.class == myClass and m.race == myRace
+    end
+    -- Records under this name that carry a realm
+    local named, namedN = nil, 0
+    for k, c in pairs(ns.db.chars) do
+        if type(k) == "string" and k ~= bare and k:sub(1, #bare) == bare then
+            namedN = namedN + 1
+            if Mine(c) then named = k end
+        end
+    end
+    -- The game does not always have the realm's name ready at login. The key then came out as "Name-" and
+    -- the character got a second, empty record for that login (seen once: an hour of play filed apart from
+    -- the four before it). With no realm, the one record under this name is used.
+    if key == bare and named and namedN == 1 then key = named end
     local char = ns.db.chars[key]
+    -- A record made that way on an earlier login is joined to the real one, or becomes it
+    local stray = key ~= bare and ns.db.chars[bare] or nil
+    if stray and Mine(stray) and namedN <= 1 then
+        ns.db.chars[bare] = nil
+        if not char then
+            char = stray
+            ns.db.chars[key] = char
+        else
+            local n = #(stray.events or {})
+            MergeChar(char, stray)
+            Print(string.format("joined %d events that were saved apart from this character (its realm name was missing at one login)", n))
+        end
+    end
     if not char then
         char = { sessions = {}, pos = {}, events = {}, counters = {}, probe = { events = {} } }
         ns.db.chars[key] = char
@@ -212,7 +343,9 @@ local function InitChar()
     char.meta = char.meta or {}
     local meta = char.meta
     meta.name = UnitName("player")
-    meta.realm = GetRealmName()
+    local realm = GetRealmName()
+    if (type(realm) == "string" and realm ~= "") or not meta.realm then meta.realm = realm end
+    meta.guid = myGUID or meta.guid
     meta.class = class
     meta.race = race
     meta.sex = UnitSex("player")
