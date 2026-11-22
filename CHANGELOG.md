@@ -1,5 +1,13 @@
 # Hearthlog changelog
 
+## 0.3.25
+- `/hl linktest <name>`: measures how fast your copy of the addon can talk to another player's copy.
+  It whispers a batch of hidden addon messages (40 of 200 bytes by default) and their copy answers with
+  how many arrived and over how long. The messages are filler: nothing of anyone's journey is sent.
+  Both players need this version. The result is printed and kept in the saved file.
+  This is groundwork: I want to know whether friends could share their journey with each other in
+  game, and that depends on how much the game lets an addon send.
+
 ## 0.3.24
 From a week on two characters, checked against the game's combat log.
 - A character could end up with two records. The game does not always have the realm's name ready at

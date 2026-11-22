@@ -37,6 +37,7 @@ newer version, and `/hl who` shows who has it.
 | `/hl events [n]` | The last n events (default 10) |
 | `/hl top <group> [n]` | Top entries of a tally: `items`, `used`, `spells`, `skills`, `buffs`, `emotes`, `chat`, `gold` |
 | `/hl who` | Who in the guild and group has Hearthlog, and their versions |
+| `/hl linktest <name>` | Measures how fast your copy can talk to that player's copy. Sends filler only, nothing of your journey |
 | `/hl version` | Your version and the releases page |
 | `/hl probe` | Probe status. `on`, `off`, `list` (top events seen) |
 | `/hl pause` | Stop recording until typed again or relog |

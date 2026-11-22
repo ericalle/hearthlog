@@ -471,6 +471,34 @@ for _, e in ipairs(ns.char.events) do if e.k == "KILL" then n = n + 1 end end
 return first .. ">" .. ns.char.counters.kills, n''')
 assert (kills, events) == ("0>1", 1), (kills, events)
 
+# ---- 0.3.25 ----
+# /hl linktest: two copies measure how fast they can talk. Sending side: a hello, and once it is answered the
+# batch goes out by whisper, a refused send (the game's throttle) is sent again, and the other side's report
+# is printed and kept. Receiving side: answers the hello, counts what arrives and reports it.
+sent, refused, got, kept, answer, report = run(True, '''
+local n = 0
+M.addonSendResult = function() n = n + 1; if n == 3 then return 3 end return 0 end -- the third send is refused once
+ns.LinkTest("danwar 5 0.1")
+local hello = M.sentAddon[#M.sentAddon]
+local id = hello.msg:match("^H:(%d+)$")
+M.Fire("CHAT_MSG_ADDON", "HLNK1", "A:" .. id .. ":0.3.25", "WHISPER", "Danwar-TestRealm"); M.Advance(3)
+local batch, to = 0, nil
+for _, m in ipairs(M.sentAddon) do
+    if m.prefix == "HLNK1" and m.msg:sub(1, 2) == "T:" then batch = batch + 1; to = m.target .. "/" .. m.chan .. "/" .. #m.msg end
+end
+M.Fire("CHAT_MSG_ADDON", "HLNK1", "R:" .. id .. ":5:1000:1250", "WHISPER", "Danwar-TestRealm"); M.Advance(1)
+local rec = HearthlogDB.linkTests[#HearthlogDB.linkTests]
+-- and the other way round: someone tests us
+M.addonSendResult = nil
+M.Fire("CHAT_MSG_ADDON", "HLNK1", "H:77", "WHISPER", "Rhonrir-TestRealm")
+local answer = M.sentAddon[#M.sentAddon].msg:match("^A:77:") and M.sentAddon[#M.sentAddon].target
+for i = 1, 4 do M.Fire("CHAT_MSG_ADDON", "HLNK1", "T:77:" .. i .. ":4:" .. string.rep("x", 190), "WHISPER", "Rhonrir-TestRealm"); M.Advance(0.2) end
+M.Advance(3)
+local last = M.sentAddon[#M.sentAddon]
+return batch .. " " .. to, rec.results, rec.got, rec.role .. " " .. rec.to .. " " .. rec.gotBytes, answer, last.msg:match("^(R:77:4:%d+):") .. " " .. last.target''')
+assert (sent, got, kept, answer, report) == ("6 Danwar/WHISPER/200", 5, "send Danwar 1000", "Rhonrir-TestRealm", "R:77:4:796 Rhonrir-TestRealm"), (sent, refused, got, kept, answer, report)
+assert "3 x1" in refused and "0 x5" in refused, refused
+
 # Forever: chat the game hides (text, sender or both) is no error, your own messages are counted where they are
 # sent, and a whisper counts too
 errors, messages, chans = run(True, '''

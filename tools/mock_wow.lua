@@ -289,7 +289,10 @@ _G.LE_PARTY_CATEGORY_INSTANCE = 2
 M.sentAddon = {}
 _G.C_ChatInfo = {
     RegisterAddonMessagePrefix = function() return true end,
-    SendAddonMessage = function(prefix, msg, chan) tinsert(M.sentAddon, { prefix = prefix, msg = msg, chan = chan }) end,
+    SendAddonMessage = function(prefix, msg, chan, target)
+        tinsert(M.sentAddon, { prefix = prefix, msg = msg, chan = chan, target = target })
+        if M.addonSendResult then return M.addonSendResult(#M.sentAddon) end
+    end,
 }
 _G.GetCoinTextureString = function(c) return tostring(c) .. "c" end
 _G.UnitClassification = function() return M.targetClass end

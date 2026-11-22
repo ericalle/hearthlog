@@ -587,6 +587,8 @@ SlashCmdList.HEARTHLOG = function(msg)
         end
     elseif cmd == "who" then
         if ns.WhoHasAddon then ns.WhoHasAddon() end
+    elseif cmd == "linktest" then
+        if ns.LinkTest then ns.LinkTest(arg) end
     elseif cmd == "version" then
         Print(string.format("v%s  ·  %s", ns.VERSION, ns.URL))
     elseif cmd == "errors" then
