@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: Hearthlog
-## Notes: Records your character's journey (path, events, sessions) for replay and a year-end recap. Local only, nothing leaves your machine.
+## Notes: Tracks your character's journey (path, events, sessions) for a map replay and a possible year-end Wrapped.
 ## Author: Eric Allen
 ## Version: 0.3.25
 ## SavedVariables: HearthlogDB

@@ -4,7 +4,7 @@ local Print = ns.Print
 -- =========================================================
 -- VERSION: tell friends when a newer Hearthlog is out
 -- =========================================================
--- The addon has no network access, so players tell each other. On login
+-- An addon cannot look a version up anywhere, so players' copies tell each other. On login
 -- the version goes to the guild; when a group forms, to the party. Anyone
 -- who hears a newer version than their own gets one chat line per session
 -- pointing at the releases page. /hl who lists who answered.
@@ -92,7 +92,7 @@ end
 -- =========================================================
 -- /hl linktest <name> [count] [seconds between] sends a batch of hidden addon messages to one player by
 -- whisper and asks their copy how many arrived and over how long. It is a measurement and nothing else:
--- the messages are filler, nothing of anyone's journey is in them. Both players need this version.
+-- the messages are filler. Both players need this version.
 -- The result is printed and kept in the saved file (linkTests, the last 20), on both sides.
 -- Messages (prefix HLNK1): "H:<id>" hello, "A:<id>:<version>" answer, "T:<id>:<n>:<of>:<filler>" one of
 -- the batch, "R:<id>:<count>:<bytes>:<milliseconds>" what the receiver counted.

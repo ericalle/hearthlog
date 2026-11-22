@@ -1,6 +1,6 @@
 # Hearthlog
 
-A World of Warcraft addon that records your character's journey locally: the path you walk, and the things that happen along it (levels, quests, deaths, kills, dungeons, party changes, gold, loot, gear, hearths, taxis, jumps, gz on dings). Nothing leaves your machine. The data feeds a map replay, a personal year-end recap, and a group recap built from friends' files.
+A World of Warcraft addon that tracks your character's journey: the path you walk, and the things that happen along it (levels, quests, deaths, kills, dungeons, party changes, gold, loot, gear, hearths, taxis, jumps, gz on dings). The data is for a map replay and, if it comes together, a year-end Wrapped for you and one for the group.
 
 Runs on WoW Forever, Classic Era and Retail from one codebase (three TOC files). Written for Forever before Forever could be tested, so every game call is guarded and a probe records which events the client actually fires.
 
@@ -37,7 +37,7 @@ newer version, and `/hl who` shows who has it.
 | `/hl events [n]` | The last n events (default 10) |
 | `/hl top <group> [n]` | Top entries of a tally: `items`, `used`, `spells`, `skills`, `buffs`, `emotes`, `chat`, `gold` |
 | `/hl who` | Who in the guild and group has Hearthlog, and their versions |
-| `/hl linktest <name>` | Measures how fast your copy can talk to that player's copy. Sends filler only, nothing of your journey |
+| `/hl linktest <name>` | Measures how fast your copy can talk to that player's copy, with a batch of filler messages |
 | `/hl version` | Your version and the releases page |
 | `/hl probe` | Probe status. `on`, `off`, `list` (top events seen) |
 | `/hl pause` | Stop recording until typed again or relog |
